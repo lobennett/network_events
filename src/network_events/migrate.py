@@ -21,10 +21,9 @@ Survey data:
     - {survey_root}/demographics_surveys/raw/s{sub}/*
   Target: sourcedata/survey_data/sub-{sub}/{category}/
 
-Usage:
-    uv run python -m network_events.migrate --help
+All entry points are exposed as `network-events` CLI subcommands
+(`migrate`, `migrate-archive`, `migrate-survey`); see network_events.cli.
 """
-import argparse
 import csv
 import json
 import logging
@@ -34,6 +33,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def _write_migration_report(report: dict, output_dir, name: str) -> Path:
+    """Write a migration provenance report JSON to ``output_dir/name``.
+
+    Prepends a UTC ``generated`` timestamp and creates ``output_dir`` if
+    needed. Shared by the ``migrate`` / ``migrate-archive`` / ``migrate-survey``
+    CLI handlers so every reachable migration path leaves a provenance record.
+    Returns the report path.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"generated": datetime.now(timezone.utc).isoformat(), **report}
+    report_path = output_dir / name
+    report_path.write_text(json.dumps(payload, indent=2) + "\n")
+    return report_path
 
 
 # ---------------------------------------------------------------------------
@@ -129,45 +144,6 @@ def migrate_from_manifest(
     return report
 
 
-def main_in_scanner():
-    parser = argparse.ArgumentParser(
-        description="Migrate in-scanner behavioral data to BIDS sourcedata using reviewed manifest"
-    )
-    parser.add_argument("--manifest", required=True, type=Path,
-                        help="Reviewed TSV manifest from network_events.reconcile")
-    parser.add_argument("--raw-dir", required=True, type=Path,
-                        help="Path to raw_cleaned behavioral directory (for out-of-scanner, survey, mTurk)")
-    parser.add_argument("--output-dir", required=True, type=Path,
-                        help="Sourcedata output root")
-    parser.add_argument("--sample", required=True, choices=["discovery", "validation"],
-                        help="Sample name (for filtering out-of-scanner/survey subjects)")
-    parser.add_argument("--strict", action="store_true",
-                        help="Fail if any manifest rows are still 'pending'")
-    args = parser.parse_args()
-
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-    report = migrate_from_manifest(args.manifest, args.output_dir, strict=args.strict)
-
-    # Write migration report
-    report_out = {
-        "generated": datetime.now(timezone.utc).isoformat(),
-        "manifest": str(args.manifest),
-        "sample": args.sample,
-        **{k: v for k, v in report.items() if k != "files"},
-        "files": report["files"],
-    }
-    report_path = args.output_dir / "migration_report.json"
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report_out, indent=2) + "\n")
-
-    print(f"Copied: {report['copied']}")
-    print(f"Skipped (pending): {report['skipped_pending']}")
-    print(f"Skipped (irreconcilable): {report['skipped_irreconcilable']}")
-    print(f"Skipped (skip): {report['skipped_skip']}")
-    print(f"Report: {report_path}")
-
-
 # ---------------------------------------------------------------------------
 # Out-of-scanner behavioral + survey (from migrate_archive.py)
 # ---------------------------------------------------------------------------
@@ -240,44 +216,3 @@ def migrate_survey(survey_root, output_dir, subjects):
 
     log.info("Survey: copied %d files", copied)
     return copied
-
-
-def main_archive():
-    parser = argparse.ArgumentParser(
-        description="Migrate out-of-scanner behavioral and survey data to BIDS sourcedata"
-    )
-    parser.add_argument("--raw-dir", required=True, type=Path,
-                        help="raw_cleaned behavioral archive")
-    parser.add_argument("--survey-root", required=True, type=Path,
-                        help="survey_data root containing prescan_surveys/ and demographics_surveys/")
-    parser.add_argument("--output-dir", required=True, type=Path,
-                        help="sourcedata output root")
-    parser.add_argument("--manifests", nargs="+", required=True, type=Path,
-                        help="Reconciliation manifests for subject filtering")
-    args = parser.parse_args()
-
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-    subjects = _load_subjects_from_manifests(args.manifests)
-    log.info("Migrating %d subjects", len(subjects))
-
-    out_scanner_copied = migrate_out_scanner(args.raw_dir, args.output_dir, subjects)
-    survey_copied = migrate_survey(args.survey_root, args.output_dir, subjects)
-
-    report = {
-        "generated": datetime.now(timezone.utc).isoformat(),
-        "subjects": sorted(subjects),
-        "out_scanner_files": out_scanner_copied,
-        "survey_files": survey_copied,
-    }
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    report_path = args.output_dir / "archive_migration_report.json"
-    report_path.write_text(json.dumps(report, indent=2) + "\n")
-
-    print(f"Out-of-scanner: {out_scanner_copied} files")
-    print(f"Survey: {survey_copied} files")
-    print(f"Report: {report_path}")
-
-
-if __name__ == "__main__":
-    main_in_scanner()
