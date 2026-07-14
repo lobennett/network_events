@@ -21,8 +21,26 @@ def _reconcile(a):
     _reconcile_mod.write_manifest_tsv(rows, a.output)
 
 def _migrate(a):
-    _migrate_mod.migrate_from_manifest(manifest_path=a.manifest,
-                                       output_dir=a.output_dir, strict=a.strict)
+    report = _migrate_mod.migrate_from_manifest(manifest_path=a.manifest,
+                                                output_dir=a.output_dir, strict=a.strict)
+    payload = {"manifest": str(a.manifest),
+               **{k: v for k, v in report.items() if k != "files"},
+               "files": report["files"]}
+    _migrate_mod._write_migration_report(payload, a.output_dir, "migration_report.json")
+
+def _migrate_archive(a):
+    subjects = _migrate_mod._load_subjects_from_manifests(a.manifest)
+    copied = _migrate_mod.migrate_out_scanner(raw_dir=a.raw_dir,
+                                              output_dir=a.output_dir, subjects=subjects)
+    payload = {"subjects": sorted(subjects), "out_scanner_files": copied}
+    _migrate_mod._write_migration_report(payload, a.output_dir, "archive_migration_report.json")
+
+def _migrate_survey(a):
+    subjects = _migrate_mod._load_subjects_from_manifests(a.manifest)
+    copied = _migrate_mod.migrate_survey(survey_root=a.survey_root,
+                                        output_dir=a.output_dir, subjects=subjects)
+    payload = {"subjects": sorted(subjects), "survey_files": copied}
+    _migrate_mod._write_migration_report(payload, a.output_dir, "survey_migration_report.json")
 
 def _create(a):
     run_create_events(behavioral_dir=Path(a.sourcedata), bids_dir=Path(a.bids_dir))
@@ -49,6 +67,18 @@ def main(argv=None):
     p = sub.add_parser("migrate"); p.add_argument("--manifest", required=True)
     p.add_argument("--output-dir", required=True); p.add_argument("--strict", action="store_true")
     p.set_defaults(func=_migrate)
+
+    p = sub.add_parser("migrate-archive"); p.add_argument("--raw-dir", required=True)
+    p.add_argument("--output-dir", required=True)
+    p.add_argument("--manifest", action="append", required=True,
+                   help="Reconciliation manifest for subject filtering (repeatable)")
+    p.set_defaults(func=_migrate_archive)
+
+    p = sub.add_parser("migrate-survey"); p.add_argument("--survey-root", required=True)
+    p.add_argument("--output-dir", required=True)
+    p.add_argument("--manifest", action="append", required=True,
+                   help="Reconciliation manifest for subject filtering (repeatable)")
+    p.set_defaults(func=_migrate_survey)
 
     p = sub.add_parser("create"); p.add_argument("--sourcedata", required=True)
     p.add_argument("--bids-dir", required=True); p.set_defaults(func=_create)
