@@ -53,10 +53,11 @@ def run(behavioral_dir, bids_dir, manifest=None, survey_root=None) -> None:
     if _manifest_has_pending(manifest):
         raise SystemExit(f"Manifest {manifest} still has 'pending' rows — resolve them first.")
 
-    # 2. Migrate in-scanner (per reviewed manifest) + survey (if given).
+    # 2. Migrate in-scanner (per reviewed manifest) + out-of-scanner + survey (if given).
     migrate_from_manifest(manifest_path=manifest, output_dir=sourcedata, strict=True)
+    subjects = _load_subjects_from_manifests([manifest])
+    migrate_out_scanner(raw_dir=behavioral_dir, output_dir=sourcedata, subjects=subjects)
     if survey_root is not None:
-        subjects = _load_subjects_from_manifests([manifest])
         migrate_survey(survey_root=Path(survey_root), output_dir=sourcedata, subjects=subjects)
 
     # 3. Events -> QC -> behavioral trim.

@@ -24,4 +24,4 @@ def test_run_full_pipeline_with_reviewed_manifest(tmp_path, monkeypatch):
     m = tmp_path / "reviewed.tsv"; m.write_text("subject\tsession\tstatus\ns03\t01\tresolved\n")
     (tmp_path / "beh").mkdir(); (tmp_path / "bids").mkdir()
     nerun.run(behavioral_dir=tmp_path / "beh", bids_dir=tmp_path / "bids", manifest=m, survey_root=None)
-    assert calls == ["migrate", "create", "qc", "trim"]  # survey skipped (no survey_root)
+    assert calls == ["migrate", "out", "create", "qc", "trim"]  # survey skipped (no survey_root)
