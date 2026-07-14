@@ -5,6 +5,7 @@ Review gate: without a reviewed manifest, run reconcile only and stop for review
 """
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 from network_events.reconcile import reconcile as _reconcile_impl, write_manifest_tsv
@@ -32,9 +33,16 @@ def reconcile(*, bids_dir, raw_dir, scan_notes=None, output):
 
 
 def _manifest_has_pending(manifest: Path) -> bool:
-    """True if any row is still 'pending' (unreviewed)."""
-    text = Path(manifest).read_text()
-    return "pending" in text.lower()
+    """True if any manifest row has ``action == 'pending'`` (unreviewed).
+
+    Parses the TSV (matching migrate.py's strict-mode logic) rather than
+    substring-scanning the raw text, so a free-text ``notes`` column that
+    happens to contain the word "pending" can't trip the review gate. If the
+    manifest has no ``action`` column, treat it as having no pending rows.
+    """
+    with open(Path(manifest), newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        return any(row.get("action") == "pending" for row in reader)
 
 
 def run(behavioral_dir, bids_dir, manifest=None, survey_root=None) -> None:
