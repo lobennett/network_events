@@ -31,7 +31,9 @@ must be available in the environment you run trimming in).
 | Step | Module | Role |
 |------|--------|------|
 | `reconcile` | `network_events.reconcile` | Read-only: match BIDS BOLD scans to raw behavioral CSVs -> TSV manifest for human review |
-| `migrate` | `network_events.migrate` | Copy in-scanner behavioral (per reviewed manifest), out-of-scanner practice/pretouch, and survey data into BIDS `sourcedata/` |
+| `migrate` | `network_events.migrate` | Copy in-scanner behavioral (per reviewed manifest) into BIDS `sourcedata/in_scanner_behavior/` |
+| `migrate-archive` | `network_events.migrate` | Copy out-of-scanner practice/pretouch behavioral into `sourcedata/out_scanner_behavior/` |
+| `migrate-survey` | `network_events.migrate` | Copy prescan/demographics survey data into `sourcedata/survey_data/` |
 | `create` | `network_events.create` | Generate BIDS `_events.tsv` files from `sourcedata` behavioral CSVs |
 | `qc` | `network_events.qc` | Compute behavioral QC metrics, flag task-specific exclusion criteria, detect RT-tail-cutoff trim candidates |
 | `trim` | `network_events.trim` | Trim BOLD NIfTIs to match a behavioral cutoff detected by QC |
@@ -40,7 +42,9 @@ Each step is invocable individually via the `network-events` CLI, or as a
 single orchestrated run via `network-events run`, which enforces a
 **manifest review gate**: without a reviewed manifest it runs `reconcile`
 only and stops, printing the manifest path for human review; re-run with
-`--manifest <reviewed.tsv>` to proceed through migrate -> create -> qc -> trim.
+`--manifest <reviewed.tsv>` to proceed through migrate (in-scanner) ->
+out-of-scanner -> create -> qc -> trim. (`run` also migrates survey data when
+`--survey-root` is given; every migration step is separately invocable below.)
 
 ```bash
 # Step 1: reconcile only, review the manifest it writes
@@ -59,6 +63,12 @@ network-events reconcile --bids-dir <BIDS> --raw-dir <raw> \
 
 network-events migrate --manifest manifest.tsv --output-dir <BIDS>/sourcedata [--strict]
 
+network-events migrate-archive --raw-dir <raw> --output-dir <BIDS>/sourcedata \
+  --manifest manifest.tsv [--manifest other_manifest.tsv ...]
+
+network-events migrate-survey --survey-root <survey_data> --output-dir <BIDS>/sourcedata \
+  --manifest manifest.tsv [--manifest other_manifest.tsv ...]
+
 network-events create --sourcedata <BIDS>/sourcedata --bids-dir <BIDS>
 
 network-events qc --sourcedata <BIDS>/sourcedata --bids-dir <BIDS>
@@ -72,6 +82,21 @@ All commands are pure/idempotent given the same inputs, so an operator can
 wrap them in `datalad run` for full provenance capture:
 
 ```bash
+datalad run -m "network_events: migrate in-scanner behavioral" \
+  --output 'sourcedata/in_scanner_behavior/**' \
+  --output 'sourcedata/migration_report.json' \
+  network-events migrate --manifest manifest.tsv --output-dir sourcedata --strict
+
+datalad run -m "network_events: migrate out-of-scanner behavioral" \
+  --output 'sourcedata/out_scanner_behavior/**' \
+  --output 'sourcedata/archive_migration_report.json' \
+  network-events migrate-archive --raw-dir <raw> --output-dir sourcedata --manifest manifest.tsv
+
+datalad run -m "network_events: migrate survey data" \
+  --output 'sourcedata/survey_data/**' \
+  --output 'sourcedata/survey_migration_report.json' \
+  network-events migrate-survey --survey-root <survey_data> --output-dir sourcedata --manifest manifest.tsv
+
 datalad run -m "network_events: generate events" \
   --input 'sourcedata/in_scanner_behavior/**' \
   --output 'sub-*/ses-*/func/*_events.tsv' \
