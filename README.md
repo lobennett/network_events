@@ -97,6 +97,21 @@ network-events qc --sourcedata <BIDS>/sourcedata --bids-dir <BIDS>
 network-events trim --bids-dir <BIDS>
 ```
 
+## Reviewed reconciliation manifests
+
+The authoritative, human-reviewed behavioral↔BOLD reconciliation manifests for
+the r01network cohorts live in this repo (they are study config, and
+`network_events` owns both halves of their lifecycle — `reconcile` produces them,
+`migrate` consumes them):
+
+```
+config/manifests/reconciliation_discovery.tsv
+config/manifests/reconciliation_validation.tsv
+```
+
+Pass one to `migrate` / `run` via `--manifest`. These supersede the copies that
+formerly lived in the retired `neuro_workflow` monolith.
+
 ## `datalad run` recipes
 
 All commands are pure/idempotent given the same inputs, so an operator can
