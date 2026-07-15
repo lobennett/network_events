@@ -14,6 +14,27 @@ Behavioral QC *computation* lives here (`qc.py`); integrating QC-derived
 exclusions into a study-wide compiled-exclusions/provenance system is the
 responsibility of the separate `network_qa` package (not yet built).
 
+### Non-monotonic-onset truncation + trial-retention metric
+
+Occasionally the raw jsPsych `time_elapsed` clock jumps backward mid-run (an
+unrecoverable ExpFactory logging glitch). `network_events.create.create_events_df`
+always truncates the run at the first backward onset step, keeping only the
+clean monotonic prefix -- this is a data-integrity fix, not a policy decision,
+so it is unconditional.
+
+That truncation drops some number of `test_trial` rows. `create` measures the
+loss (`events_truncation_stats`) and, in `run_create_events`, writes it next to
+each `_events.tsv` as an `_events.json` sidecar:
+
+```json
+{"NTestTrialsExpected": 40, "NTestTrialsRetained": 12, "FractionTestTrialsDropped": 0.7}
+```
+
+**This package makes no exclusion decision from that number.** Deciding
+whether a given `FractionTestTrialsDropped` is small enough to salvage the run
+or large enough to exclude it (the monolith used a >50% threshold) is
+`network_qa`'s job -- it is the consumer of this sidecar.
+
 ## Install
 
 Requires Python >=3.11. On a compute node (never the login node on a shared
@@ -100,6 +121,7 @@ datalad run -m "network_events: migrate survey data" \
 datalad run -m "network_events: generate events" \
   --input 'sourcedata/in_scanner_behavior/**' \
   --output 'sub-*/ses-*/func/*_events.tsv' \
+  --output 'sub-*/ses-*/func/*_events.json' \
   network-events create --sourcedata sourcedata --bids-dir .
 
 datalad run -m "network_events: behavioral QC" \

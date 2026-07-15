@@ -1,4 +1,28 @@
-"""Generate BIDS _events.tsv files from behavioral CSVs."""
+"""Generate BIDS _events.tsv files from behavioral CSVs.
+
+Non-monotonic-onset truncation
+-------------------------------
+Occasionally the raw jsPsych ``time_elapsed`` clock jumps backward mid-run (an
+unrecoverable ExpFactory logging glitch we cannot trace or fix at the source).
+Trials after that jump have unreliable absolute timing, so :func:`create_events_df`
+truncates the run at the first backward step and keeps only the clean monotonic
+prefix. This is always applied -- it is a data-integrity fix, not a policy
+decision.
+
+Trial-retention metric (the network_qa seam)
+---------------------------------------------
+Every truncation drops some number of ``test_trial`` rows. :func:`create_events_df`
+does not know (and does not decide) whether that loss is small enough to salvage
+the run or large enough to exclude it -- that call belongs to a separate package,
+``network_qa``. What this module does is *measure* the loss and expose it in
+machine-readable form: :func:`run_create_events` writes a ``NTestTrialsExpected``
+/ ``NTestTrialsRetained`` / ``FractionTestTrialsDropped`` JSON sidecar next to
+each ``_events.tsv`` (see :func:`events_truncation_stats`). ``network_qa`` (or any
+downstream consumer) reads that sidecar to apply its own exclusion threshold
+(e.g. the monolith's ">50% of test trials dropped" rule); this package makes no
+such call.
+"""
+import json
 import logging
 import re
 from pathlib import Path
@@ -12,6 +36,7 @@ from network_events.utils import (
     cal_time_elapsed,
     add_choice_acc,
     add_cols,
+    find_nonmonotonic_cut,
     response_time_and_junk,
 )
 
@@ -110,8 +135,8 @@ def _get_rows_with_feedback(df: pd.DataFrame, original_df: pd.DataFrame):
     return feedback_block_rows, indices_to_change
 
 
-def create_events_df(filename: Path, short_name: str) -> pd.DataFrame:
-    """Create a BIDS events dataframe from a behavioral CSV."""
+def _build_events_df(filename: Path, short_name: str) -> pd.DataFrame:
+    """Build the events dataframe up to (but excluding) non-monotonic truncation."""
     original_df = pd.read_csv(filename)
     exp_id = original_df["exp_id"][0]
     log.info("Processing %s for %s", filename, exp_id)
@@ -123,6 +148,32 @@ def create_events_df(filename: Path, short_name: str) -> pd.DataFrame:
     df = response_time_and_junk(df, short_name)
     df = _set_default_event_cols(df)
     df = _rename_cells(df, exp_id)
+
+    # cuedTSWFlanker: the cued-task-switch factor (composite trial_type +
+    # cue_condition/task_condition) lands only on the test_cue row, while the
+    # modeled test_trial row carries just flanker_condition. (The exp_id lacks
+    # the "__fmri" suffix the add_cols special-case checks, so its shift never
+    # fires.) Propagate the switch factor from each test_cue onto the
+    # immediately following test_trial, only where the test_trial value is
+    # missing — so test_trial rows carry the switch trial_type like every other
+    # dual task.
+    if "flanker_with_cued_task_switching" in exp_id:
+        is_cue = df["trial_id"] == "test_cue"
+        is_trial = df["trial_id"] == "test_trial"
+        for col in ("trial_type", "cue_condition", "task_condition"):
+            if col not in df.columns:
+                continue
+            carried = df[col].where(is_cue).ffill()
+            fill = is_trial & df[col].isna()
+            df.loc[fill, col] = carried[fill]
+
+    # nBackWSpatialTS: raw n_back_condition mixes case (Mismatch vs mismatch),
+    # so the composite trial_type does too. Normalize to lowercase on test_trial
+    # rows for consistent cells. str.lower() leaves genuine NaN as NaN (it does
+    # not create the string "nan").
+    if "n_back_with_spatial_task_switching" in exp_id:
+        is_trial = df["trial_id"] == "test_trial"
+        df.loc[is_trial, "trial_type"] = df.loc[is_trial, "trial_type"].str.lower()
 
     # Convert all columns to object dtype before filling NaN with "n/a"
     # (newer pandas refuses to fill float columns with string values)
@@ -142,11 +193,64 @@ def create_events_df(filename: Path, short_name: str) -> pd.DataFrame:
         if index in df.index:
             df.loc[index, "trial_id"] = "break_with_performance_feedback"
 
-    # Flag non-monotonic onsets (from neg_rt_correction time_elapsed reconstruction)
-    if not df["onset"].is_monotonic_increasing:
-        log.warning("Non-monotonic onsets detected in %s — add to .bidsignore", short_name)
-
     return df
+
+
+def _nonmonotonic_truncation(df: pd.DataFrame):
+    """Locate the non-monotonic-onset truncation point and its test-trial cost.
+
+    Returns ``(cut, n_test_total, n_test_dropped)`` where ``cut`` is the
+    positional index of the first backward onset step (or ``None`` if monotonic).
+    """
+    cut = find_nonmonotonic_cut(df["onset"])
+    n_test_total = int((df["trial_id"] == "test_trial").sum())
+    if cut is None:
+        return None, n_test_total, 0
+    n_test_dropped = int((df["trial_id"].iloc[cut:] == "test_trial").sum())
+    return cut, n_test_total, n_test_dropped
+
+
+def create_events_df(filename: Path, short_name: str) -> pd.DataFrame:
+    """Create a BIDS events dataframe from a behavioral CSV.
+
+    Truncates at the first non-monotonic onset (a backward ``time_elapsed`` clock
+    glitch): trials after the jump have unreliable absolute timing, so the clean
+    monotonic prefix is kept. The complementary trial-retention metric is exposed
+    by :func:`events_truncation_stats` for downstream QC (``network_qa``) to act
+    on; this function makes no exclusion decision.
+    """
+    df = _build_events_df(filename, short_name)
+    cut, n_total, n_dropped = _nonmonotonic_truncation(df)
+    if cut is not None:
+        log.warning(
+            "Non-monotonic onset in %s at row %d — truncating %d trailing rows "
+            "(%d/%d test trials dropped)",
+            short_name,
+            cut,
+            len(df) - cut,
+            n_dropped,
+            n_total,
+        )
+        df = df.iloc[:cut].reset_index(drop=True)
+    return df
+
+
+def events_truncation_stats(filename: Path, short_name: str) -> dict:
+    """Non-monotonic-onset truncation stats for a behavioral CSV (no side effects).
+
+    Returns ``{cut, n_test_total, n_test_dropped, fraction_test_dropped}``. This is
+    the trial-retention metric surfaced to ``network_qa``: no >50% (or any other)
+    exclusion threshold is applied here.
+    """
+    df = _build_events_df(filename, short_name)
+    cut, n_total, n_dropped = _nonmonotonic_truncation(df)
+    frac = (n_dropped / n_total) if n_total else 0.0
+    return {
+        "cut": cut,
+        "n_test_total": n_total,
+        "n_test_dropped": n_dropped,
+        "fraction_test_dropped": frac,
+    }
 
 
 def discover_nifti_tasks(func_dir: Path) -> set[str]:
@@ -188,6 +292,25 @@ def group_csvs_by_task(
     return out
 
 
+def _write_truncation_sidecar(events_tsv_path: Path, tstats: dict) -> Path:
+    """Write the trial-retention metric next to an ``_events.tsv`` as its JSON sidecar.
+
+    This is the machine-readable seam ``network_qa`` (or any other downstream
+    consumer) reads to apply its own exclusion policy (e.g. the monolith's
+    ">50% of test trials dropped" rule) -- no threshold is applied here.
+    """
+    sidecar_path = events_tsv_path.with_suffix(".json")
+    n_total = tstats["n_test_total"]
+    n_dropped = tstats["n_test_dropped"]
+    sidecar = {
+        "NTestTrialsExpected": n_total,
+        "NTestTrialsRetained": n_total - n_dropped,
+        "FractionTestTrialsDropped": tstats["fraction_test_dropped"],
+    }
+    sidecar_path.write_text(json.dumps(sidecar, indent=2))
+    return sidecar_path
+
+
 def run_create_events(
     behavioral_dir: Path,
     bids_dir: Path,
@@ -201,6 +324,11 @@ def run_create_events(
         bids_dir: Path to BIDS dataset root (events written to func/ dirs)
         subjects: Optional list of subjects to process (default: all)
         sessions: Optional list of sessions to process (default: all)
+
+    Alongside each ``_events.tsv``, writes a ``_events.json`` sidecar carrying the
+    non-monotonic-truncation trial-retention metric (see
+    :func:`events_truncation_stats` / :func:`_write_truncation_sidecar`). No
+    exclusion decision is made here -- that is ``network_qa``'s job.
     """
     for sub_dir in sorted(behavioral_dir.glob("sub-*")):
         if subjects and sub_dir.name not in subjects:
@@ -225,8 +353,10 @@ def run_create_events(
                 outname = f"{sub_dir.name}_{ses_dir.name}_task-{task_name}_run-{run_num}_events.tsv"
                 outpath = func_dir / outname
 
+                tstats = None
                 try:
                     df = create_events_df(csv_file, task_name)
+                    tstats = events_truncation_stats(csv_file, task_name)
                     log.info("Writing events.tsv: %s", outpath)
                 except Exception as e:
                     log.warning(
@@ -236,4 +366,6 @@ def run_create_events(
                     df = create_empty_events_df()
 
                 df.to_csv(outpath, sep="\t", index=False, na_rep="n/a")
+                if tstats is not None:
+                    _write_truncation_sidecar(outpath, tstats)
                 tasks_with_events.add(task_name)

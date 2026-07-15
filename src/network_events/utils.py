@@ -39,6 +39,22 @@ def add_choice_acc(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def find_nonmonotonic_cut(onsets) -> int | None:
+    """Positional index of the first onset strictly less than its predecessor.
+
+    A backward step in event onsets means the raw jsPsych ``time_elapsed`` clock
+    jumped backward (a logging glitch); trials from that point on have unreliable
+    absolute timing. Returns the positional index where the first decrease occurs
+    (the truncation point), or ``None`` if onsets are monotonic non-decreasing.
+    """
+    prev = None
+    for i, v in enumerate(onsets):
+        if prev is not None and v < prev:
+            return i
+        prev = v
+    return None
+
+
 # --- Column selection and trial_type construction ---
 # (Ported directly from discovery_wm/events/utils.py get_cols_list / get_trial_type / add_cols)
 
