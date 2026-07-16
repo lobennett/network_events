@@ -184,7 +184,13 @@ class TestTruncationStatsRecorded:
         assert abs(stats["fraction_test_dropped"] - 0.7) < 1e-9
 
     def test_sidecar_json_surfaces_metric(self, tmp_path):
-        """run_create_events writes an _events.json sidecar network_qa can read."""
+        """run_create_events writes a truncation-QC sidecar network_qa can read.
+
+        The sidecar lives OUT of func/ -- under sourcedata/events_qc/ with a
+        non-reserved ``_desc-truncation.json`` name -- so bids-validator does
+        not reject it (``_events.json`` in func/ is reserved for events-column
+        descriptions). No ``_events.json`` is written into func/.
+        """
         from network_events.create import run_create_events
 
         beh = tmp_path / "sourcedata" / "sub-s01" / "ses-01" / "beh"
@@ -201,8 +207,14 @@ class TestTruncationStatsRecorded:
         run_create_events(behavioral_dir=tmp_path / "sourcedata", bids_dir=tmp_path)
 
         events_tsv = func_dir / "sub-s01_ses-01_task-flanker_run-1_events.tsv"
-        sidecar_path = func_dir / "sub-s01_ses-01_task-flanker_run-1_events.json"
         assert events_tsv.exists()
+        # No reserved _events.json sidecar leaks into func/
+        assert not (func_dir / "sub-s01_ses-01_task-flanker_run-1_events.json").exists()
+
+        sidecar_path = (
+            tmp_path / "sourcedata" / "events_qc" / "sub-s01" / "ses-01"
+            / "sub-s01_ses-01_task-flanker_run-1_desc-truncation.json"
+        )
         assert sidecar_path.exists()
         sidecar = json.loads(sidecar_path.read_text())
         assert sidecar["NTestTrialsExpected"] == 40

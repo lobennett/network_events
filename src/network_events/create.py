@@ -16,11 +16,15 @@ does not know (and does not decide) whether that loss is small enough to salvage
 the run or large enough to exclude it -- that call belongs to a separate package,
 ``network_qa``. What this module does is *measure* the loss and expose it in
 machine-readable form: :func:`run_create_events` writes a ``NTestTrialsExpected``
-/ ``NTestTrialsRetained`` / ``FractionTestTrialsDropped`` JSON sidecar next to
-each ``_events.tsv`` (see :func:`events_truncation_stats`). ``network_qa`` (or any
-downstream consumer) reads that sidecar to apply its own exclusion threshold
-(e.g. the monolith's ">50% of test trials dropped" rule); this package makes no
-such call.
+/ ``NTestTrialsRetained`` / ``FractionTestTrialsDropped`` JSON sidecar for each
+run at ``sourcedata/events_qc/<sub>/<ses>/<sub>_<ses>_task-<task>_run-<run>_desc-truncation.json``
+(see :func:`events_truncation_stats` / :func:`truncation_sidecar_path`). It lives
+under ``sourcedata/`` (validator-ignored) with a non-reserved ``_desc-truncation``
+name rather than as an ``_events.json`` in ``func/`` -- the latter is reserved by
+BIDS for events-column descriptions and would be rejected by bids-validator.
+``network_qa`` (or any downstream consumer) reads that sidecar to apply its own
+exclusion threshold (e.g. the monolith's ">50% of test trials dropped" rule);
+this package makes no such call.
 """
 import json
 import logging
@@ -292,14 +296,39 @@ def group_csvs_by_task(
     return out
 
 
-def _write_truncation_sidecar(events_tsv_path: Path, tstats: dict) -> Path:
-    """Write the trial-retention metric next to an ``_events.tsv`` as its JSON sidecar.
+def truncation_sidecar_path(
+    bids_dir: Path, sub: str, ses: str, task: str, run: int | str
+) -> Path:
+    """Resolve the truncation-QC sidecar path for a given scan.
+
+    The sidecar lives OUTSIDE the BIDS ``func/`` tree, under
+    ``sourcedata/events_qc/<sub>/<ses>/`` with a non-reserved
+    ``_desc-truncation.json`` name. This keeps it clear of the BIDS-reserved
+    ``_events.json`` filename (which bids-validator interprets as an
+    events-column description and rejects for this content), while remaining a
+    validator-ignored ``sourcedata/`` file.
+    """
+    return (
+        bids_dir
+        / "sourcedata"
+        / "events_qc"
+        / sub
+        / ses
+        / f"{sub}_{ses}_task-{task}_run-{run}_desc-truncation.json"
+    )
+
+
+def _write_truncation_sidecar(sidecar_path: Path, tstats: dict) -> Path:
+    """Write the trial-retention metric to its truncation-QC sidecar.
 
     This is the machine-readable seam ``network_qa`` (or any other downstream
     consumer) reads to apply its own exclusion policy (e.g. the monolith's
-    ">50% of test trials dropped" rule) -- no threshold is applied here.
+    ">50% of test trials dropped" rule) -- no threshold is applied here. The
+    target path (see :func:`truncation_sidecar_path`) lives under
+    ``sourcedata/events_qc/`` rather than in ``func/`` so bids-validator does
+    not reject it. Parent directories are created as needed.
     """
-    sidecar_path = events_tsv_path.with_suffix(".json")
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     n_total = tstats["n_test_total"]
     n_dropped = tstats["n_test_dropped"]
     sidecar = {
@@ -325,10 +354,13 @@ def run_create_events(
         subjects: Optional list of subjects to process (default: all)
         sessions: Optional list of sessions to process (default: all)
 
-    Alongside each ``_events.tsv``, writes a ``_events.json`` sidecar carrying the
-    non-monotonic-truncation trial-retention metric (see
-    :func:`events_truncation_stats` / :func:`_write_truncation_sidecar`). No
-    exclusion decision is made here -- that is ``network_qa``'s job.
+    For each ``_events.tsv``, writes a truncation-QC sidecar carrying the
+    non-monotonic-truncation trial-retention metric at
+    ``sourcedata/events_qc/<sub>/<ses>/<sub>_<ses>_task-<task>_run-<run>_desc-truncation.json``
+    (see :func:`events_truncation_stats` / :func:`truncation_sidecar_path` /
+    :func:`_write_truncation_sidecar`). It is written under ``sourcedata/`` --
+    not as an ``_events.json`` in ``func/`` -- so bids-validator does not reject
+    it. No exclusion decision is made here -- that is ``network_qa``'s job.
     """
     for sub_dir in sorted(behavioral_dir.glob("sub-*")):
         if subjects and sub_dir.name not in subjects:
@@ -367,5 +399,8 @@ def run_create_events(
 
                 df.to_csv(outpath, sep="\t", index=False, na_rep="n/a")
                 if tstats is not None:
-                    _write_truncation_sidecar(outpath, tstats)
+                    sidecar_path = truncation_sidecar_path(
+                        bids_dir, sub_dir.name, ses_dir.name, task_name, run_num
+                    )
+                    _write_truncation_sidecar(sidecar_path, tstats)
                 tasks_with_events.add(task_name)
