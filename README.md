@@ -105,12 +105,14 @@ the r01network cohorts live in this repo (they are study config, and
 `migrate` consumes them):
 
 ```
-config/manifests/reconciliation_discovery.tsv
-config/manifests/reconciliation_validation.tsv
+src/network_events/config/manifests/reconciliation_discovery.tsv
+src/network_events/config/manifests/reconciliation_validation.tsv
 ```
 
-Pass one to `migrate` / `run` via `--manifest`. These supersede the copies that
-formerly lived in the retired `neuro_workflow` monolith.
+They live *inside* the package (shipped in the wheel), so they travel with an
+installed `network_events` and resolve via `network_events.__file__` — no
+external path needed. Pass one to `migrate` / `run` via `--manifest`. These
+supersede the copies that formerly lived in the retired `neuro_workflow` monolith.
 
 ## `datalad run` recipes
 
