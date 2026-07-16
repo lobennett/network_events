@@ -42,11 +42,19 @@ def _migrate_survey(a):
     payload = {"subjects": sorted(subjects), "survey_files": copied}
     _migrate_mod._write_migration_report(payload, a.output_dir, "survey_migration_report.json")
 
+def _in_scanner(sourcedata):
+    """Resolve the dir holding sub-*/ses-*/beh CSVs. In-scanner behavioral
+    migrates to <sourcedata>/in_scanner_behavior/, so prefer that when present;
+    fall back to the given path (already the in_scanner dir)."""
+    sd = Path(sourcedata)
+    cand = sd / "in_scanner_behavior"
+    return cand if cand.is_dir() else sd
+
 def _create(a):
-    run_create_events(behavioral_dir=Path(a.sourcedata), bids_dir=Path(a.bids_dir))
+    run_create_events(behavioral_dir=_in_scanner(a.sourcedata), bids_dir=Path(a.bids_dir))
 
 def _qc(a):
-    run_qc(behavioral_dir=Path(a.sourcedata), bids_dir=Path(a.bids_dir))
+    run_qc(behavioral_dir=_in_scanner(a.sourcedata), bids_dir=Path(a.bids_dir))
 
 def _trim(a):
     run_trim(bids_dir=Path(a.bids_dir))

@@ -52,3 +52,26 @@ def test_run_does_not_block_on_pending_in_free_text(tmp_path, monkeypatch):
     (tmp_path / "beh").mkdir(); (tmp_path / "bids").mkdir()
     nerun.run(behavioral_dir=tmp_path / "beh", bids_dir=tmp_path / "bids", manifest=m, survey_root=None)
     assert calls == ["migrate", "out", "create", "qc", "trim"]
+
+
+def test_run_points_create_and_qc_at_in_scanner_behavior(tmp_path, monkeypatch):
+    """Regression: create/qc must scan sourcedata/in_scanner_behavior (where the
+    in-scanner CSVs migrate to), not the sourcedata root (which has no sub-*
+    directly). The orchestrator previously passed the root, so create/qc found
+    zero subjects and silently produced no events."""
+    captured = {}
+    monkeypatch.setattr(nerun, "migrate_from_manifest", lambda **k: None)
+    monkeypatch.setattr(nerun, "_load_subjects_from_manifests", lambda m: [])
+    monkeypatch.setattr(nerun, "migrate_out_scanner", lambda **k: None)
+    monkeypatch.setattr(nerun, "run_create_events",
+                        lambda **k: captured.__setitem__("create", k["behavioral_dir"]))
+    monkeypatch.setattr(nerun, "run_qc",
+                        lambda **k: captured.__setitem__("qc", k["behavioral_dir"]))
+    monkeypatch.setattr(nerun, "run_trim", lambda **k: None)
+    m = tmp_path / "m.tsv"
+    m.write_text("subject\taction\nsub-s1\tcopy\n")
+    bids = tmp_path / "bids"
+    nerun.run(behavioral_dir=tmp_path / "beh", bids_dir=bids, manifest=m, survey_root=None)
+    expected = bids / "sourcedata" / "in_scanner_behavior"
+    assert captured["create"] == expected
+    assert captured["qc"] == expected

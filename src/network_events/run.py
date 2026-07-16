@@ -68,7 +68,10 @@ def run(behavioral_dir, bids_dir, manifest=None, survey_root=None) -> None:
     if survey_root is not None:
         migrate_survey(survey_root=Path(survey_root), output_dir=sourcedata, subjects=subjects)
 
-    # 3. Events -> QC -> behavioral trim.
-    run_create_events(behavioral_dir=sourcedata, bids_dir=bids_dir)
-    run_qc(behavioral_dir=sourcedata, bids_dir=bids_dir)
+    # 3. Events -> QC -> behavioral trim. The in-scanner CSVs migrate to
+    # sourcedata/in_scanner_behavior/sub-*/ses-*/beh/, so create/qc must scan
+    # that subdir (not the sourcedata root, which holds no sub-* directly).
+    in_scanner = sourcedata / "in_scanner_behavior"
+    run_create_events(behavioral_dir=in_scanner, bids_dir=bids_dir)
+    run_qc(behavioral_dir=in_scanner, bids_dir=bids_dir)
     run_trim(bids_dir=bids_dir)
