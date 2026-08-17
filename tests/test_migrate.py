@@ -165,3 +165,43 @@ def test_migrate_out_scanner_places_practice_under_out_scanner_behavior(tmp_path
     hits = list((out / "out_scanner_behavior").rglob("*.csv"))
     assert hits, "expected a practice csv copied under out_scanner_behavior/"
     assert any("sub-s03" in str(p) or "s03" in str(p) for p in hits)
+
+
+def test_missing_raw_file_is_fatal(tmp_path):
+    """A manifest row that says `copy` but whose raw_path is gone must FAIL, not warn.
+
+    Regression: raw_path used to be warn-and-skip. When the raw behavioural tree moved
+    (the 2026-08 Oak cleanup removed _archive_someone_plz_clean), all 2265 rows in the
+    shipped manifests pointed at a dead path — so a full run skipped every file, exited
+    0, and produced a dataset with no events at all. Silent, and downstream everything
+    looks merely 'empty'.
+    """
+    import pytest
+
+    from network_events.migrate import migrate_from_manifest
+
+    manifest = _write_manifest(tmp_path, [{
+        "subject": "s03", "session": "ses-01", "task": "goNogo",
+        "status": "matched", "action": "copy", "dest_session": "ses-01",
+        "raw_path": str(tmp_path / "raw" / "gone.csv"), "bold_path": "",
+        "same_task_other_sessions": "", "notes": "",
+    }])
+
+    with pytest.raises(FileNotFoundError, match="raw_path"):
+        migrate_from_manifest(manifest, tmp_path / "sourcedata")
+
+
+def test_blank_raw_path_is_fatal(tmp_path):
+    """Same for a row that says `copy` with no raw_path at all."""
+    import pytest
+
+    from network_events.migrate import migrate_from_manifest
+
+    manifest = _write_manifest(tmp_path, [{
+        "subject": "s03", "session": "ses-01", "task": "goNogo",
+        "status": "matched", "action": "copy", "dest_session": "ses-01",
+        "raw_path": "", "bold_path": "", "same_task_other_sessions": "", "notes": "",
+    }])
+
+    with pytest.raises(FileNotFoundError, match="raw_path"):
+        migrate_from_manifest(manifest, tmp_path / "sourcedata")

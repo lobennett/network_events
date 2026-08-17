@@ -82,7 +82,6 @@ def migrate_from_manifest(
         "skipped_pending": 0,
         "skipped_irreconcilable": 0,
         "skipped_skip": 0,
-        "skipped_no_raw_path": 0,
         "files": [],
     }
 
@@ -111,11 +110,16 @@ def migrate_from_manifest(
                         action, row["subject"], row["session"], row["task"])
             continue
 
+        # A row that says `copy` with no readable source is a broken manifest, not a
+        # skippable case: warn-and-skip once turned a raw-tree relocation into a
+        # silent run that copied nothing, exited 0, and yielded a dataset with no
+        # events. Fail loudly instead.
         raw_path = row.get("raw_path", "")
         if not raw_path or not Path(raw_path).exists():
-            log.warning("Raw file not found: %s", raw_path)
-            report["skipped_no_raw_path"] += 1
-            continue
+            raise FileNotFoundError(
+                f"manifest raw_path missing for {row['subject']} {row['session']} "
+                f"{row['task']}: {raw_path!r}"
+            )
 
         subject = row["subject"]
         dest_session = row["dest_session"]
