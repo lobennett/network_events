@@ -1,4 +1,11 @@
-"""Trim NIfTIs to match behavioral cutoff."""
+"""Trim NIfTIs to match the behavioral cutoff.
+
+Distinct from the upstream dummy-volume trim: that removes a fixed number of
+non-steady-state volumes from the *start*, this truncates the *end* of a run whose
+behavioral record stops early (e.g. a non-monotonic onset clock). Onsets reaching
+here are already shifted for the discarded dummies, so the cutoff arithmetic assumes
+an already-trimmed NIfTI — see `assert_dummy_trimmed`.
+"""
 import json
 import logging
 import math
@@ -6,6 +13,24 @@ import re
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def assert_dummy_trimmed(json_path: Path) -> None:
+    """Fail loudly if a NIfTI still carries its dummy volumes.
+
+    Cutoffs are computed from onsets already shifted by
+    `NumberOfVolumesDiscardedByUser` x `RepetitionTime`, so truncating an untrimmed
+    run silently lands the cutoff that many volumes off.
+    """
+    try:
+        meta = json.loads(json_path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise ValueError(f"cannot read sidecar {json_path}: {e}") from e
+    if "NumberOfVolumesDiscardedByUser" not in meta:
+        raise ValueError(
+            f"{json_path.name} has no NumberOfVolumesDiscardedByUser: the run has not "
+            "been dummy-trimmed, so a behavioral cutoff would be misaligned"
+        )
 
 
 def calculate_volume_cutoff(onset_cutoff_ms: float, tr_seconds: float) -> int:
@@ -84,6 +109,7 @@ def run_trim(bids_dir: Path) -> None:
                 log.warning("No JSON sidecar for %s, skipping", nifti_path)
                 continue
 
+            assert_dummy_trimmed(json_path)
             sidecar = json.loads(json_path.read_text())
             tr = sidecar.get("RepetitionTime")
             if tr is None:

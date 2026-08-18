@@ -86,10 +86,38 @@ def _rename_cells(df: pd.DataFrame, exp_id: str) -> pd.DataFrame:
     return df
 
 
-DUMMY_OFFSET_S = N_DUMMY * TR_SECONDS  # 10.43s (N_DUMMY/TR_SECONDS from core.acquisition)
+DUMMY_OFFSET_S = N_DUMMY * TR_SECONDS  # 10.43s fallback when no sidecar is available
 
 
-def _set_default_event_cols(df: pd.DataFrame) -> pd.DataFrame:
+def dummy_offset_from_sidecar(func_dir: Path, sub: str, ses: str, task: str,
+                              run: int | str) -> float:
+    """Onset shift implied by the BOLD sidecar, in seconds.
+
+    Preferred over the module constants: `NumberOfVolumesDiscardedByUser` x
+    `RepetitionTime` is per-run truth, so a run that was never trimmed shifts by 0
+    and the correction cannot be applied twice or to the wrong TR. Falls back to
+    the constants (with a warning) only when no sidecar can be read.
+    """
+    pattern = f"{sub}_{ses}_task-{task}_run-{run}_*bold.json"
+    for cand in sorted(func_dir.glob(pattern)):
+        try:
+            meta = json.loads(cand.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        n = meta.get("NumberOfVolumesDiscardedByUser")
+        tr = meta.get("RepetitionTime")
+        if n is not None and tr:
+            return float(n) * float(tr)
+        if tr:
+            log.warning("%s has no NumberOfVolumesDiscardedByUser; assuming untrimmed",
+                        cand.name)
+            return 0.0
+    log.warning("no BOLD sidecar for %s %s task-%s run-%s; falling back to %.2fs",
+                sub, ses, task, run, DUMMY_OFFSET_S)
+    return DUMMY_OFFSET_S
+
+
+def _set_default_event_cols(df: pd.DataFrame, offset_s: float = DUMMY_OFFSET_S) -> pd.DataFrame:
     df = df[df.time_elapsed > 0]
     df = df.rename(columns={"time_elapsed": "onset", "choice_acc": "acc", "stim_duration": "duration", "rt": "response_time"})
     df["onset"] = df["onset"] / 1000
@@ -97,8 +125,9 @@ def _set_default_event_cols(df: pd.DataFrame) -> pd.DataFrame:
     df["response_time"] = df["response_time"] / 1000
     df["response_time"] = df["response_time"].replace(-0.001, np.nan)
 
-    # Adjust onsets for trimmed dummy volumes (7 * 1.49s = 10.43s)
-    df["onset"] = df["onset"] - DUMMY_OFFSET_S
+    # Adjust onsets for volumes the imaging pipeline discarded (per-run, from the
+    # sidecar where available).
+    df["onset"] = df["onset"] - offset_s
     df = df[df["onset"] >= 0]
     first_columns = ["onset", "duration", "response_time", "trial_id", "trial_type", "key_press", "correct_response"]
     new_column_order = first_columns + [col for col in df.columns if col not in first_columns]
@@ -139,7 +168,8 @@ def _get_rows_with_feedback(df: pd.DataFrame, original_df: pd.DataFrame):
     return feedback_block_rows, indices_to_change
 
 
-def _build_events_df(filename: Path, short_name: str) -> pd.DataFrame:
+def _build_events_df(filename: Path, short_name: str,
+                     offset_s: float = DUMMY_OFFSET_S) -> pd.DataFrame:
     """Build the events dataframe up to (but excluding) non-monotonic truncation."""
     original_df = pd.read_csv(filename)
     exp_id = original_df["exp_id"][0]
@@ -150,7 +180,7 @@ def _build_events_df(filename: Path, short_name: str) -> pd.DataFrame:
     df = add_choice_acc(df)
     df = add_cols(df, exp_id)
     df = response_time_and_junk(df, short_name)
-    df = _set_default_event_cols(df)
+    df = _set_default_event_cols(df, offset_s)
     df = _rename_cells(df, exp_id)
 
     # cuedTSWFlanker: the cued-task-switch factor (composite trial_type +
@@ -214,7 +244,8 @@ def _nonmonotonic_truncation(df: pd.DataFrame):
     return cut, n_test_total, n_test_dropped
 
 
-def create_events_df(filename: Path, short_name: str) -> pd.DataFrame:
+def create_events_df(filename: Path, short_name: str,
+                     offset_s: float = DUMMY_OFFSET_S) -> pd.DataFrame:
     """Create a BIDS events dataframe from a behavioral CSV.
 
     Truncates at the first non-monotonic onset (a backward ``time_elapsed`` clock
@@ -223,7 +254,7 @@ def create_events_df(filename: Path, short_name: str) -> pd.DataFrame:
     by :func:`events_truncation_stats` for downstream QC (``network_qa``) to act
     on; this function makes no exclusion decision.
     """
-    df = _build_events_df(filename, short_name)
+    df = _build_events_df(filename, short_name, offset_s)
     cut, n_total, n_dropped = _nonmonotonic_truncation(df)
     if cut is not None:
         log.warning(
@@ -239,14 +270,15 @@ def create_events_df(filename: Path, short_name: str) -> pd.DataFrame:
     return df
 
 
-def events_truncation_stats(filename: Path, short_name: str) -> dict:
+def events_truncation_stats(filename: Path, short_name: str,
+                            offset_s: float = DUMMY_OFFSET_S) -> dict:
     """Non-monotonic-onset truncation stats for a behavioral CSV (no side effects).
 
     Returns ``{cut, n_test_total, n_test_dropped, fraction_test_dropped}``. This is
     the trial-retention metric surfaced to ``network_qa``: no >50% (or any other)
     exclusion threshold is applied here.
     """
-    df = _build_events_df(filename, short_name)
+    df = _build_events_df(filename, short_name, offset_s)
     cut, n_total, n_dropped = _nonmonotonic_truncation(df)
     frac = (n_dropped / n_total) if n_total else 0.0
     return {
@@ -387,8 +419,10 @@ def run_create_events(
 
                 tstats = None
                 try:
-                    df = create_events_df(csv_file, task_name)
-                    tstats = events_truncation_stats(csv_file, task_name)
+                    offset_s = dummy_offset_from_sidecar(
+                        func_dir, sub_dir.name, ses_dir.name, task_name, run_num)
+                    df = create_events_df(csv_file, task_name, offset_s)
+                    tstats = events_truncation_stats(csv_file, task_name, offset_s)
                     log.info("Writing events.tsv: %s", outpath)
                 except Exception as e:
                     log.warning(

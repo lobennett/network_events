@@ -1,28 +1,11 @@
 #!/usr/bin/env python3
-"""Migrate behavioral data (in-scanner + out-of-scanner + survey) to BIDS sourcedata.
+"""Copy out-of-scanner and survey behavioral data into BIDS sourcedata.
 
-Merged from the original ``migrate_behavioral.py`` (in-scanner, manifest-driven)
-and ``migrate_archive.py`` (out-of-scanner practice/pretouch + survey data)
-extraction sources.
+In-scanner CSVs arrive already cleaned and 1:1 from `network_fmri behavior-clean`,
+so no manifest-driven migration happens here.
 
-In-scanner behavioral:
-  Source: reviewed reconciliation manifest (see network_events.reconcile)
-  Target: sourcedata/in_scanner_behavior/sub-{sub}/ses-{X}/beh/*_beh.csv
-
-Out-of-scanner behavioral:
-  Sources:
-    - {raw_dir}/s{sub}/ses-{X}/practice/*.csv  (per-session practice runs)
-    - {raw_dir}/s{sub}/pretouch/*.csv          (subject-level pretouch runs)
-  Target: sourcedata/out_scanner_behavior/sub-{sub}/
-
-Survey data:
-  Sources:
-    - {survey_root}/prescan_surveys/raw/s{sub}/*  (JSON + PDF)
-    - {survey_root}/demographics_surveys/raw/s{sub}/*
-  Target: sourcedata/survey_data/sub-{sub}/{category}/
-
-All entry points are exposed as `network-events` CLI subcommands
-(`migrate`, `migrate-archive`, `migrate-survey`); see network_events.cli.
+Out-of-scanner behavioral: practice/pretouch runs -> sourcedata/out_scanner_behavior/
+Survey: prescan + demographics -> sourcedata/survey/
 """
 import csv
 import json
@@ -54,110 +37,6 @@ def _write_migration_report(report: dict, output_dir, name: str) -> Path:
 # ---------------------------------------------------------------------------
 # In-scanner behavioral (from migrate_behavioral.py)
 # ---------------------------------------------------------------------------
-
-def migrate_from_manifest(
-    manifest_path: Path,
-    output_dir: Path,
-    strict: bool = False,
-) -> dict:
-    """Copy in-scanner behavioral files according to the reviewed manifest.
-
-    Args:
-        manifest_path: TSV manifest from network_events.reconcile
-        output_dir: Sourcedata output root
-        strict: If True, raise SystemExit if any rows are still 'pending'
-
-    Returns:
-        Report dict with counts.
-    """
-    manifest_path = Path(manifest_path)
-    output_dir = Path(output_dir)
-
-    with open(manifest_path, newline="") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        rows = list(reader)
-
-    report = {
-        "copied": 0,
-        "skipped_pending": 0,
-        "skipped_irreconcilable": 0,
-        "skipped_skip": 0,
-        "skipped_no_raw_path": 0,
-        "files": [],
-    }
-
-    pending_rows = [r for r in rows if r["action"] == "pending"]
-    if strict and pending_rows:
-        log.error(
-            "%d rows still marked 'pending'. Resolve all discrepancies before migrating.",
-            len(pending_rows),
-        )
-        sys.exit(1)
-
-    for row in rows:
-        action = row["action"]
-
-        if action == "pending":
-            report["skipped_pending"] += 1
-            continue
-        if action == "skip":
-            report["skipped_skip"] += 1
-            continue
-        if action == "irreconcilable":
-            report["skipped_irreconcilable"] += 1
-            continue
-        if action != "copy":
-            log.warning("Unknown action '%s' for %s %s %s, skipping",
-                        action, row["subject"], row["session"], row["task"])
-            continue
-
-        raw_path = row.get("raw_path", "")
-        if not raw_path or not Path(raw_path).exists():
-            log.warning("Raw file not found: %s", raw_path)
-            report["skipped_no_raw_path"] += 1
-            continue
-
-        subject = row["subject"]
-        dest_session = row["dest_session"]
-        task = row["task"]
-        dest_run = row.get("dest_run", "").strip()
-
-        sub_label = f"sub-{subject}" if not subject.startswith("sub-") else subject
-        run_part = f"_run-{dest_run}" if dest_run else ""
-        filename = f"{sub_label}_{dest_session}_task-{task}{run_part}_beh.csv"
-        dest_path = output_dir / "in_scanner_behavior" / sub_label / dest_session / "beh" / filename
-
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(raw_path, dest_path)
-
-        report["copied"] += 1
-        report["files"].append({
-            "src": raw_path,
-            "dest": str(dest_path),
-            "subject": subject,
-            "session": dest_session,
-            "task": task,
-        })
-
-        log.info("Copied %s -> %s", Path(raw_path).name, dest_path)
-
-    return report
-
-
-# ---------------------------------------------------------------------------
-# Out-of-scanner behavioral + survey (from migrate_archive.py)
-# ---------------------------------------------------------------------------
-
-def _load_subjects_from_manifests(manifest_paths):
-    """Collect all subject labels appearing in the provided manifests."""
-    subjects = set()
-    for mp in manifest_paths:
-        with open(mp, newline="") as f:
-            for row in csv.DictReader(f, delimiter="\t"):
-                sub = row["subject"].replace("sub-", "")
-                subjects.add(sub)
-    return subjects
-
 
 def migrate_out_scanner(raw_dir, output_dir, subjects):
     """Copy practice and pretouch files for each subject."""
