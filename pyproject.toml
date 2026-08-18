@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Study-specific behavioral + BIDS event-generation pipeline for the r01network project (raw jsPsych CSV -> sourcedata + _events.tsv + QC + trim)."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["numpy", "pandas"]
+# nibabel: trim.py truncates NIfTIs; it was imported but never declared.
+dependencies = ["numpy", "pandas", "nibabel"]
 
 [project.scripts]
 network-events = "network_events.cli:main"
