@@ -109,6 +109,7 @@ def run_trim(bids_dir: Path) -> None:
                 log.warning("No JSON sidecar for %s, skipping", nifti_path)
                 continue
 
+            assert_dummy_trimmed(json_path)
             sidecar = json.loads(json_path.read_text())
             tr = sidecar.get("RepetitionTime")
             if tr is None:

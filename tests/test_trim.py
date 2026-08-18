@@ -63,3 +63,21 @@ class TestTrimNifti:
 
         patched = json.loads(out_json.read_text())
         assert patched["NumVolumes"] == 7
+
+
+class TestDummyTrimGuard:
+    """The cutoff assumes onsets already shifted for discarded dummies."""
+
+    def test_raises_when_sidecar_lacks_the_marker(self, tmp_path):
+        import pytest
+        from network_events.trim import assert_dummy_trimmed
+        j = tmp_path / "x_bold.json"
+        j.write_text('{"RepetitionTime": 1.49}')
+        with pytest.raises(ValueError, match="not been dummy-trimmed"):
+            assert_dummy_trimmed(j)
+
+    def test_passes_when_marker_present(self, tmp_path):
+        from network_events.trim import assert_dummy_trimmed
+        j = tmp_path / "x_bold.json"
+        j.write_text('{"RepetitionTime": 1.49, "NumberOfVolumesDiscardedByUser": 7}')
+        assert_dummy_trimmed(j)      # must not raise
