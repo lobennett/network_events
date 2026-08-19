@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Copy out-of-scanner and survey behavioral data into BIDS sourcedata.
 
-In-scanner CSVs arrive already cleaned and 1:1 from `network_fmri behavior-clean`,
+In-scanner CSVs arrive already reconciled and 1:1 via `network_fmri ingest-beh`,
 so no manifest-driven migration happens here.
 
 Out-of-scanner behavioral: practice/pretouch runs -> sourcedata/out_scanner_behavior/

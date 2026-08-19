@@ -2,10 +2,11 @@
 
 Pure + idempotent so an operator can wrap each invocation in `datalad run`.
 
-The in-scanner behavioral tree is produced upstream by `network_fmri
-behavior-clean`, which resolves session alignment and run assignment and writes
-`sourcedata/<sub>/<ses>/beh/<sub>_<ses>_task-<T>_run-<N>_beh.csv`. That removes the
-reconciliation manifest and its review gate entirely.
+The in-scanner behavioral tree arrives already reconciled: `network_fmri ingest-beh` copies
+it from the canonical dataset at `$OAK/.../behavioral_data/canonical` into
+`sourcedata/<sub>/<ses>/beh/<sub>_<ses>_task-<T>_run-<N>_beh.csv`, one CSV per BOLD run.
+Session alignment and run assignment are settled there, which removes the reconciliation
+manifest and its review gate entirely.
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ def run(behavioral_dir, bids_dir, survey_root=None) -> None:
     subjects = subjects_in(sourcedata)
     if not subjects:
         raise SystemExit(
-            f"no sub-* directories in {sourcedata}: run `network_fmri behavior-clean` first"
+            f"no sub-* directories in {sourcedata}: run `network_fmri ingest-beh` first"
         )
 
     migrate_out_scanner(raw_dir=behavioral_dir, output_dir=sourcedata, subjects=subjects)
