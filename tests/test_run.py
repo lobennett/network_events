@@ -17,7 +17,7 @@ def test_subjects_in_reads_the_cleaned_tree(tmp_path):
 
 def test_run_refuses_when_sourcedata_is_empty(tmp_path):
     (tmp_path / "sourcedata").mkdir()
-    with pytest.raises(SystemExit, match="behavior-clean"):
+    with pytest.raises(SystemExit, match="ingest-beh"):
         run_mod.run(behavioral_dir=tmp_path, bids_dir=tmp_path)
 
 
