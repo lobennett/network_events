@@ -9,6 +9,15 @@ truncates the run at the first backward step and keeps only the clean monotonic
 prefix. This is always applied -- it is a data-integrity fix, not a policy
 decision.
 
+Scan-length truncation
+----------------------
+When a run is aborted at the scanner the behavioural session keeps going, so the
+CSV describes trials that were never imaged. :func:`create_events_df` therefore
+also clips onsets to the acquired scan length (:func:`acquired_duration`, read from
+the NIfTI because the sidecar's ``NumberOfTemporalPositions`` reports the intended
+count). Also a data-integrity fix: without it a first-level model builds regressors
+for timepoints that do not exist.
+
 Trial-retention metric (the network_qa seam)
 ---------------------------------------------
 Every truncation drops some number of ``test_trial`` rows. :func:`create_events_df`
@@ -31,6 +40,7 @@ import logging
 import re
 from pathlib import Path
 
+import nibabel as nib
 import numpy as np
 import pandas as pd
 
@@ -115,6 +125,41 @@ def dummy_offset_from_sidecar(func_dir: Path, sub: str, ses: str, task: str,
     log.warning("no BOLD sidecar for %s %s task-%s run-%s; falling back to %.2fs",
                 sub, ses, task, run, DUMMY_OFFSET_S)
     return DUMMY_OFFSET_S
+
+
+def acquired_duration(func_dir: Path, sub: str, ses: str, task: str,
+                      run: int | str) -> float | None:
+    """Seconds of BOLD actually acquired for a run, or ``None`` if unreadable.
+
+    Read from the NIfTI, not the sidecar: ``NumberOfTemporalPositions`` records the
+    intended volume count, so an aborted run reports the full length it never reached.
+    The tree is already trimmed at this point, so onsets shifted by ``offset_s`` share
+    this origin and the valid window is ``[0, duration)``.
+    """
+    pattern = f"{sub}_{ses}_task-{task}_run-{run}_*bold.nii.gz"
+    for cand in sorted(func_dir.glob(pattern)):
+        try:
+            img = nib.load(cand)
+            n = img.shape[3]
+            tr = float(img.header.get_zooms()[3])
+        except (OSError, IndexError, ValueError, nib.filebasedimages.ImageFileError):
+            continue
+        if n and tr:
+            return n * tr
+    log.warning("no readable BOLD for %s %s task-%s run-%s; not clipping to scan length",
+                sub, ses, task, run)
+    return None
+
+
+def _scan_overrun(df: pd.DataFrame, scan_s: float | None):
+    """``(n_kept, n_total, n_test_dropped)`` for clipping onsets to the scan."""
+    n_total = len(df)
+    n_test_total = int((df["trial_id"] == "test_trial").sum())
+    if scan_s is None:
+        return n_total, n_total, 0, n_test_total
+    keep = df["onset"] < scan_s
+    n_test_dropped = int((df.loc[~keep, "trial_id"] == "test_trial").sum())
+    return int(keep.sum()), n_total, n_test_dropped, n_test_total
 
 
 def _set_default_event_cols(df: pd.DataFrame, offset_s: float = DUMMY_OFFSET_S) -> pd.DataFrame:
@@ -245,14 +290,21 @@ def _nonmonotonic_truncation(df: pd.DataFrame):
 
 
 def create_events_df(filename: Path, short_name: str,
-                     offset_s: float = DUMMY_OFFSET_S) -> pd.DataFrame:
+                     offset_s: float = DUMMY_OFFSET_S,
+                     scan_s: float | None = None) -> pd.DataFrame:
     """Create a BIDS events dataframe from a behavioral CSV.
 
-    Truncates at the first non-monotonic onset (a backward ``time_elapsed`` clock
-    glitch): trials after the jump have unreliable absolute timing, so the clean
-    monotonic prefix is kept. The complementary trial-retention metric is exposed
-    by :func:`events_truncation_stats` for downstream QC (``network_qa``) to act
-    on; this function makes no exclusion decision.
+    Two truncations, both timing-driven:
+
+    * the first non-monotonic onset (a backward ``time_elapsed`` clock glitch) —
+      trials after the jump have unreliable absolute timing, so the clean monotonic
+      prefix is kept;
+    * ``scan_s``, the acquired scan length, when given. A run the scanner aborted
+      leaves the behavioural session running, so the CSV describes trials that were
+      never imaged; keeping them puts regressors past the end of the timeseries.
+
+    Trial-retention metrics for both are exposed by :func:`events_truncation_stats`
+    for ``network_qa`` to act on; this function makes no exclusion decision.
     """
     df = _build_events_df(filename, short_name, offset_s)
     cut, n_total, n_dropped = _nonmonotonic_truncation(df)
@@ -267,25 +319,43 @@ def create_events_df(filename: Path, short_name: str,
             n_total,
         )
         df = df.iloc[:cut].reset_index(drop=True)
+    if scan_s is not None:
+        n_kept, n_rows, n_test_dropped, n_test = _scan_overrun(df, scan_s)
+        if n_kept < n_rows:
+            log.warning(
+                "%s events run past the end of the scan (%.1fs) — dropping %d rows "
+                "(%d/%d test trials)",
+                short_name, scan_s, n_rows - n_kept, n_test_dropped, n_test,
+            )
+            df = df[df["onset"] < scan_s].reset_index(drop=True)
     return df
 
 
 def events_truncation_stats(filename: Path, short_name: str,
-                            offset_s: float = DUMMY_OFFSET_S) -> dict:
-    """Non-monotonic-onset truncation stats for a behavioral CSV (no side effects).
+                            offset_s: float = DUMMY_OFFSET_S,
+                            scan_s: float | None = None) -> dict:
+    """Truncation stats for a behavioral CSV (no side effects).
 
-    Returns ``{cut, n_test_total, n_test_dropped, fraction_test_dropped}``. This is
-    the trial-retention metric surfaced to ``network_qa``: no >50% (or any other)
+    Returns the non-monotonic-onset metrics plus, when ``scan_s`` is given, what
+    clipping to the acquired scan costs (``scan_*`` keys). These are the
+    trial-retention metrics surfaced to ``network_qa``: no >50% (or any other)
     exclusion threshold is applied here.
     """
     df = _build_events_df(filename, short_name, offset_s)
     cut, n_total, n_dropped = _nonmonotonic_truncation(df)
     frac = (n_dropped / n_total) if n_total else 0.0
+    if cut is not None:
+        df = df.iloc[:cut]
+    n_kept, n_rows, n_test_dropped, n_test = _scan_overrun(df, scan_s)
     return {
         "cut": cut,
         "n_test_total": n_total,
         "n_test_dropped": n_dropped,
         "fraction_test_dropped": frac,
+        "scan_duration_s": scan_s,
+        "scan_rows_dropped": n_rows - n_kept,
+        "scan_test_dropped": n_test_dropped,
+        "fraction_scan_test_dropped": (n_test_dropped / n_test) if n_test else 0.0,
     }
 
 
@@ -421,8 +491,11 @@ def run_create_events(
                 try:
                     offset_s = dummy_offset_from_sidecar(
                         func_dir, sub_dir.name, ses_dir.name, task_name, run_num)
-                    df = create_events_df(csv_file, task_name, offset_s)
-                    tstats = events_truncation_stats(csv_file, task_name, offset_s)
+                    scan_s = acquired_duration(
+                        func_dir, sub_dir.name, ses_dir.name, task_name, run_num)
+                    df = create_events_df(csv_file, task_name, offset_s, scan_s)
+                    tstats = events_truncation_stats(
+                        csv_file, task_name, offset_s, scan_s)
                     log.info("Writing events.tsv: %s", outpath)
                 except Exception as e:
                     log.warning(
