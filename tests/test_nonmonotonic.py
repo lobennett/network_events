@@ -12,9 +12,7 @@ unreliable absolute timing, so:
     Deciding whether that loss is small enough to keep the run is
     ``network_qa``'s job, not this package's -- no threshold is applied here.
 
-Mirrors neuro_workflow's tests/events/test_nonmonotonic.py (the monolith that
-generated the canonical dataset), minus the run_qc exclusion-decision tests
-(that policy now lives in network_qa).
+The exclusion decision itself is network_qa's; only the truncation is tested here.
 """
 import json
 

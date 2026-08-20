@@ -1,4 +1,4 @@
-"""Dual-task create.py fixups ported from the neuro_workflow monolith.
+"""Dual-task create.py fixups.
 
 Two composite-condition tasks need a post-processing fix beyond the generic
 ``add_cols``/``_rename_cells`` machinery:
@@ -13,10 +13,7 @@ Two composite-condition tasks need a post-processing fix beyond the generic
     composite ``trial_type`` on ``test_trial`` rows must be lowercased for
     consistent cells.
 
-Mirrors the fixture style of neuro_workflow's tests/analysis/test_raw_jspsych.py
-(``_write_cued_ts_flanker_csv`` / ``_write_nback_spatial_ts_csv``), rebuilt
-locally since network_events has no dependency on neuro_workflow's raw-jsPsych
-testing helpers.
+Fixtures are built locally; this package has no raw-jsPsych test helpers to share.
 """
 import numpy as np
 import pandas as pd

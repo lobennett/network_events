@@ -1,39 +1,17 @@
 """Generate BIDS _events.tsv files from behavioral CSVs.
 
-Non-monotonic-onset truncation
--------------------------------
-Occasionally the raw jsPsych ``time_elapsed`` clock jumps backward mid-run (an
-unrecoverable ExpFactory logging glitch we cannot trace or fix at the source).
-Trials after that jump have unreliable absolute timing, so :func:`create_events_df`
-truncates the run at the first backward step and keeps only the clean monotonic
-prefix. This is always applied -- it is a data-integrity fix, not a policy
-decision.
+:func:`create_events_df` applies three timing transformations, all unconditional
+data-integrity fixes rather than policy (see README.md for the full reasoning):
 
-Scan-length truncation
-----------------------
-When a run is aborted at the scanner the behavioural session keeps going, so the
-CSV describes trials that were never imaged. :func:`create_events_df` therefore
-also clips onsets to the acquired scan length (:func:`acquired_duration`, read from
-the NIfTI because the sidecar's ``NumberOfTemporalPositions`` reports the intended
-count). Also a data-integrity fix: without it a first-level model builds regressors
-for timepoints that do not exist.
+1. shift onsets by the trimmed dummy volumes, per-run from the BOLD sidecar;
+2. truncate at the first backward ``time_elapsed`` step, past which behavioural time
+   no longer maps to the scanner;
+3. clip to the acquired scan length, so an aborted run cannot contribute trials that
+   were never imaged.
 
-Trial-retention metric (the network_qa seam)
----------------------------------------------
-Every truncation drops some number of ``test_trial`` rows. :func:`create_events_df`
-does not know (and does not decide) whether that loss is small enough to salvage
-the run or large enough to exclude it -- that call belongs to a separate package,
-``network_qa``. What this module does is *measure* the loss and expose it in
-machine-readable form: :func:`run_create_events` writes a ``NTestTrialsExpected``
-/ ``NTestTrialsRetained`` / ``FractionTestTrialsDropped`` JSON sidecar for each
-run at ``sourcedata/events_qc/<sub>/<ses>/<sub>_<ses>_task-<task>_run-<run>_desc-truncation.json``
-(see :func:`events_truncation_stats` / :func:`truncation_sidecar_path`). It lives
-under ``sourcedata/`` (validator-ignored) with a non-reserved ``_desc-truncation``
-name rather than as an ``_events.json`` in ``func/`` -- the latter is reserved by
-BIDS for events-column descriptions and would be rejected by bids-validator.
-``network_qa`` (or any downstream consumer) reads that sidecar to apply its own
-exclusion threshold (e.g. the monolith's ">50% of test trials dropped" rule);
-this package makes no such call.
+Both truncations drop trials and neither decides whether the survivor is usable --
+that is ``network_qa``'s call. :func:`run_create_events` writes the cost of each to
+``sourcedata/events_qc/<sub>/<ses>/..._desc-truncation.json`` for it to threshold on.
 """
 import json
 import logging
