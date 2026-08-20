@@ -1,4 +1,4 @@
-"""network-events CLI: subcommands mirror the behavioral pipeline steps.
+"""network-events CLI: `create` writes the events, the rest move data into sourcedata/.
 
 All subcommands are pure/idempotent so an operator can wrap them in `datalad run`.
 """

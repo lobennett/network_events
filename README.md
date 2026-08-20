@@ -1,160 +1,94 @@
 # network_events
 
-Study-specific behavioral + BIDS event-generation pipeline for the r01network
-project: raw jsPsych CSV -> BIDS `sourcedata` + `_events.tsv` + behavioral QC +
-NIfTI trim.
+Behavioural CSV → BIDS `_events.tsv` for the r01network study. Study-specific: the jsPsych
+battery, task naming and acquisition constants (`TR_SECONDS`, `N_DUMMY` in `config.py`) are
+hard-coded, and it is not a general-purpose library.
 
-This package owns the **behavioral half** of the pipeline end-to-end. It is
-study-specific (r01network jsPsych battery, task naming conventions, and
-acquisition constants are hard-coded), not a general-purpose library. It has
-zero dependency on other `network_*` packages: the two acquisition constants
-it needs (`TR_SECONDS`, `N_DUMMY`) are vendored locally in `config.py`.
+Normally invoked as stage 10 of `network_fmri pipeline`, which pins this package at a commit.
 
-Behavioral QC *computation* lives here (`qc.py`); integrating QC-derived
-exclusions into a study-wide compiled-exclusions/provenance system is the
-responsibility of the separate `network_qa` package (not yet built).
+## Install
 
-### Non-monotonic-onset truncation + trial-retention metric
+```bash
+uv sync          # Python >=3.11; on a compute node, not a login node
+```
 
-Occasionally the raw jsPsych `time_elapsed` clock jumps backward mid-run (an
-unrecoverable ExpFactory logging glitch). `network_events.create.create_events_df`
-always truncates the run at the first backward onset step, keeping only the
-clean monotonic prefix -- this is a data-integrity fix, not a policy decision,
-so it is unconditional.
+## Commands
 
-That truncation drops some number of `test_trial` rows. `create` measures the
-loss (`events_truncation_stats`) and, in `run_create_events`, writes it next to
-each `_events.tsv` as an `_events.json` sidecar:
+```bash
+network-events create --sourcedata sourcedata --bids-dir .     # the one that matters
+network-events run --behavioral-dir <raw> --bids-dir <BIDS>    # create + optional migrations
+network-events migrate-archive --raw-dir <raw> --output-dir sourcedata
+network-events migrate-survey --survey-root <survey> --output-dir sourcedata
+```
+
+`create` reads `sourcedata/sub-*/ses-*/beh/*_beh.csv` — one CSV per BOLD run, already paired —
+and writes `_events.tsv` beside each BOLD. The pairing is not done here: it is frozen in the
+canonical dataset on `$OAK` and copied in by `network_fmri ingest-beh`, which is why there is no
+reconciliation manifest or review gate any more.
+
+The two `migrate-*` commands move out-of-scanner practice data and prescan surveys into
+`sourcedata/`. They are optional and touch nothing `create` reads.
+
+## What `create` does to the timing
+
+Three transformations, in order. All three are data-integrity fixes applied unconditionally —
+none is an exclusion decision, and none of them can fail loudly, so each is measured instead.
+
+**1. Onset shift.** `network_fmri trim` drops the first 7 volumes of every BOLD, so a trimmed run
+starts `7 × 1.49 = 10.43 s` later than the scanner did. Onsets shift by −10.43 s and anything
+landing before zero is dropped. The per-run truth comes from the sidecar
+(`NumberOfVolumesDiscardedByUser × RepetitionTime`), so an untrimmed run shifts by 0 and the
+correction cannot be applied twice.
+
+**2. Non-monotonic truncation.** The raw jsPsych `time_elapsed` clock occasionally jumps backward
+mid-run — an ExpFactory logging glitch we cannot trace or fix at source. Absolute timing is
+unreliable past the jump, so the run is cut at the first backward step and only the clean
+monotonic prefix is kept.
+
+**3. Scan-length clip.** A run aborted at the scanner leaves the behavioural session running, so
+the CSV describes trials that were never imaged; keeping them puts regressors past the end of the
+timeseries. Onsets are clipped to the acquired length, read from the NIfTI rather than the
+sidecar because `NumberOfTemporalPositions` records the *intended* volume count — one scan claims
+524 volumes for 223 acquired.
+
+`duration` is deliberately not clipped, so a final trial's box-car may end a few seconds past the
+last volume. The trial was presented and its onset is inside the scan; the design matrix simply
+has no timepoints for the tail. Truncating `duration` would misstate the stimulus.
+
+## The QC seam
+
+Both truncations drop trials, and neither this package nor `create` decides whether that loss is
+survivable. It writes the numbers to
+`sourcedata/events_qc/<sub>/<ses>/<sub>_<ses>_task-<T>_run-<N>_desc-truncation.json`:
 
 ```json
 {"NTestTrialsExpected": 40, "NTestTrialsRetained": 12, "FractionTestTrialsDropped": 0.7}
 ```
 
-**This package makes no exclusion decision from that number.** Deciding
-whether a given `FractionTestTrialsDropped` is small enough to salvage the run
-or large enough to exclude it (the monolith used a >50% threshold) is
-`network_qa`'s job -- it is the consumer of this sidecar.
+`events_truncation_stats` also reports the scan clip's cost under `scan_*` keys.
+[`network_qa`](https://github.com/lobennett/network_qa) reads these and applies the threshold.
 
-## Install
+The sidecar lives under `sourcedata/` with a non-reserved `_desc-truncation` name rather than as
+an `_events.json` in `func/`: BIDS reserves the latter for events-column descriptions and
+bids-validator rejects it.
 
-Requires Python >=3.11. On a compute node (never the login node on a shared
-HPC cluster):
+## Layout
+
+```
+src/network_events/
+  cli.py         four subcommands
+  run.py         orchestration: create, plus the optional migrations
+  create.py      CSV -> events.tsv, and the three timing transformations
+  migrate.py     out-of-scanner and survey data -> sourcedata/
+  utils.py       shared helpers (incl. find_nonmonotonic_cut)
+  config.py      TR_SECONDS, N_DUMMY -- vendored, so no dependency on network_fmri
+  qc_globals.py  task-level behavioural thresholds, kept for reference
+```
+
+## Tests
 
 ```bash
-uv sync
+uv run pytest -q
 ```
 
-Dependencies: `numpy`, `pandas` (plus `nibabel`, used only by `trim.py`, which
-must be available in the environment you run trimming in).
-
-## Pipeline steps
-
-| Step | Module | Role |
-|------|--------|------|
-| `reconcile` | `network_events.reconcile` | Read-only: match BIDS BOLD scans to raw behavioral CSVs -> TSV manifest for human review |
-| `migrate` | `network_events.migrate` | Copy in-scanner behavioral (per reviewed manifest) into BIDS `sourcedata/in_scanner_behavior/` |
-| `migrate-archive` | `network_events.migrate` | Copy out-of-scanner practice/pretouch behavioral into `sourcedata/out_scanner_behavior/` |
-| `migrate-survey` | `network_events.migrate` | Copy prescan/demographics survey data into `sourcedata/survey_data/` |
-| `create` | `network_events.create` | Generate BIDS `_events.tsv` files from `sourcedata` behavioral CSVs |
-| `qc` | `network_events.qc` | Compute behavioral QC metrics, flag task-specific exclusion criteria, detect RT-tail-cutoff trim candidates |
-| `trim` | `network_events.trim` | Trim BOLD NIfTIs to match a behavioral cutoff detected by QC |
-
-Each step is invocable individually via the `network-events` CLI, or as a
-single orchestrated run via `network-events run`, which enforces a
-**manifest review gate**: without a reviewed manifest it runs `reconcile`
-only and stops, printing the manifest path for human review; re-run with
-`--manifest <reviewed.tsv>` to proceed through migrate (in-scanner) ->
-out-of-scanner -> create -> qc -> trim. (`run` also migrates survey data when
-`--survey-root` is given; every migration step is separately invocable below.)
-
-```bash
-# Step 1: reconcile only, review the manifest it writes
-network-events run --behavioral-dir <raw> --bids-dir <BIDS>
-
-# Step 2: after reviewing/resolving 'pending' rows in the manifest
-network-events run --behavioral-dir <raw> --bids-dir <BIDS> \
-  --manifest <BIDS>/reconciliation_manifest.tsv [--survey-root <survey_data>]
-```
-
-Individual subcommands:
-
-```bash
-network-events reconcile --bids-dir <BIDS> --raw-dir <raw> \
-  [--scan-notes SCAN-NOTES.md] --output manifest.tsv
-
-network-events migrate --manifest manifest.tsv --output-dir <BIDS>/sourcedata [--strict]
-
-network-events migrate-archive --raw-dir <raw> --output-dir <BIDS>/sourcedata \
-  --manifest manifest.tsv [--manifest other_manifest.tsv ...]
-
-network-events migrate-survey --survey-root <survey_data> --output-dir <BIDS>/sourcedata \
-  --manifest manifest.tsv [--manifest other_manifest.tsv ...]
-
-network-events create --sourcedata <BIDS>/sourcedata --bids-dir <BIDS>
-
-network-events qc --sourcedata <BIDS>/sourcedata --bids-dir <BIDS>
-
-network-events trim --bids-dir <BIDS>
-```
-
-## Reviewed reconciliation manifests
-
-The authoritative, human-reviewed behavioral↔BOLD reconciliation manifests for
-the r01network cohorts live in this repo (they are study config, and
-`network_events` owns both halves of their lifecycle — `reconcile` produces them,
-`migrate` consumes them):
-
-```
-src/network_events/config/manifests/reconciliation_discovery.tsv
-src/network_events/config/manifests/reconciliation_validation.tsv
-```
-
-They live *inside* the package (shipped in the wheel), so they travel with an
-installed `network_events` and resolve via `network_events.__file__` — no
-external path needed. Pass one to `migrate` / `run` via `--manifest`. These
-supersede the copies that formerly lived in the retired `neuro_workflow` monolith.
-
-## `datalad run` recipes
-
-All commands are pure/idempotent given the same inputs, so an operator can
-wrap them in `datalad run` for full provenance capture:
-
-```bash
-datalad run -m "network_events: migrate in-scanner behavioral" \
-  --output 'sourcedata/in_scanner_behavior/**' \
-  --output 'sourcedata/migration_report.json' \
-  network-events migrate --manifest manifest.tsv --output-dir sourcedata --strict
-
-datalad run -m "network_events: migrate out-of-scanner behavioral" \
-  --output 'sourcedata/out_scanner_behavior/**' \
-  --output 'sourcedata/archive_migration_report.json' \
-  network-events migrate-archive --raw-dir <raw> --output-dir sourcedata --manifest manifest.tsv
-
-datalad run -m "network_events: migrate survey data" \
-  --output 'sourcedata/survey_data/**' \
-  --output 'sourcedata/survey_migration_report.json' \
-  network-events migrate-survey --survey-root <survey_data> --output-dir sourcedata --manifest manifest.tsv
-
-datalad run -m "network_events: generate events" \
-  --input 'sourcedata/in_scanner_behavior/**' \
-  --output 'sub-*/ses-*/func/*_events.tsv' \
-  --output 'sub-*/ses-*/func/*_events.json' \
-  network-events create --sourcedata sourcedata --bids-dir .
-
-datalad run -m "network_events: behavioral QC" \
-  --input 'sourcedata/in_scanner_behavior/**' \
-  --output 'sourcedata/behavioral_qc/trim_list.json' \
-  network-events qc --sourcedata sourcedata --bids-dir .
-
-datalad run -m "network_events: trim BOLD to behavioral cutoff" \
-  --input 'sourcedata/behavioral_qc/trim_list.json' \
-  --input 'sub-*/ses-*/func/*_bold.nii.gz' \
-  --output 'derivatives/trimmed/sub-*/ses-*/func/*_desc-trimmed_bold.nii.gz' \
-  network-events trim --bids-dir .
-```
-
-## Testing
-
-```bash
-PYTHONPATH=src python -m pytest tests/ -v
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md).
