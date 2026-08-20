@@ -62,11 +62,14 @@ survivable. It writes the numbers to
 `sourcedata/events_qc/<sub>/<ses>/<sub>_<ses>_task-<T>_run-<N>_desc-truncation.json`:
 
 ```json
-{"NTestTrialsExpected": 40, "NTestTrialsRetained": 12, "FractionTestTrialsDropped": 0.7}
+{"NTestTrialsExpected": 40, "NTestTrialsRetained": 12, "FractionTestTrialsDropped": 0.7,
+ "ScanDurationSeconds": 59.6, "NScanTestTrialsDropped": 26,
+ "FractionScanTestTrialsDropped": 0.65}
 ```
 
-`events_truncation_stats` also reports the scan clip's cost under `scan_*` keys.
-[`network_qa`](https://github.com/lobennett/network_qa) reads these and applies the threshold.
+The first three describe the non-monotonic cut, the `Scan*` keys the clip to the acquired
+scan. [`network_qa`](https://github.com/lobennett/network_qa) reads them and applies the
+threshold.
 
 The sidecar lives under `sourcedata/` with a non-reserved `_desc-truncation` name rather than as
 an `_events.json` in `func/`: BIDS reserves the latter for events-column descriptions and
@@ -82,7 +85,7 @@ src/network_events/
   migrate.py     out-of-scanner and survey data -> sourcedata/
   utils.py       shared helpers (incl. find_nonmonotonic_cut)
   config.py      TR_SECONDS, N_DUMMY -- vendored, so no dependency on network_fmri
-  qc_globals.py  task-level behavioural thresholds, kept for reference
+  qc_globals.py  per-task behavioural thresholds; reference only, unused
 ```
 
 ## Tests

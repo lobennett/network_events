@@ -1,4 +1,9 @@
-"""QC thresholds and task definitions — ported from network-behavior-qc/globals.py."""
+"""Per-task behavioural thresholds. REFERENCE ONLY -- nothing reads these.
+
+The accuracy / RT / omission QC that used them was removed along with ``qc.py``. Kept
+because these values are the only surviving record of the study's task-level criteria, and
+reimplementing that QC (in ``network_qa``, where the decision belongs) would need them.
+"""
 
 # Stop signal task
 STOP_SUCCESS_ACC_LOW_THRESHOLD = 0.25

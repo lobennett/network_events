@@ -421,14 +421,12 @@ def truncation_sidecar_path(
 
 
 def _write_truncation_sidecar(sidecar_path: Path, tstats: dict) -> Path:
-    """Write the trial-retention metric to its truncation-QC sidecar.
+    """Write both truncations' trial cost to the QC sidecar.
 
-    This is the machine-readable seam ``network_qa`` (or any other downstream
-    consumer) reads to apply its own exclusion policy (e.g. the monolith's
-    ">50% of test trials dropped" rule) -- no threshold is applied here. The
-    target path (see :func:`truncation_sidecar_path`) lives under
-    ``sourcedata/events_qc/`` rather than in ``func/`` so bids-validator does
-    not reject it. Parent directories are created as needed.
+    The machine-readable seam ``network_qa`` reads to apply its own threshold; none is
+    applied here. ``FractionTestTrialsDropped`` is the non-monotonic cut, the ``Scan*``
+    keys the clip to the acquired scan. Lives under ``sourcedata/events_qc/`` rather than
+    ``func/`` so bids-validator does not reject it.
     """
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     n_total = tstats["n_test_total"]
@@ -437,6 +435,9 @@ def _write_truncation_sidecar(sidecar_path: Path, tstats: dict) -> Path:
         "NTestTrialsExpected": n_total,
         "NTestTrialsRetained": n_total - n_dropped,
         "FractionTestTrialsDropped": tstats["fraction_test_dropped"],
+        "ScanDurationSeconds": tstats["scan_duration_s"],
+        "NScanTestTrialsDropped": tstats["scan_test_dropped"],
+        "FractionScanTestTrialsDropped": tstats["fraction_scan_test_dropped"],
     }
     sidecar_path.write_text(json.dumps(sidecar, indent=2))
     return sidecar_path

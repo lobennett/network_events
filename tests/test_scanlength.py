@@ -124,3 +124,28 @@ class TestEndToEnd:
             func / "sub-s01_ses-01_task-flanker_run-1_events.tsv", sep="\t")
         assert ev["onset"].max() < 59.6
         assert (ev["trial_id"] == "test_trial").sum() == 14
+
+
+class TestSidecarCarriesBothTruncations:
+    def test_scan_keys_reach_network_qa(self, tmp_path):
+        """The clip's cost must reach the sidecar, or network_qa cannot threshold on it."""
+        import json
+        from network_events.create import run_create_events
+
+        beh = tmp_path / "sourcedata" / "sub-s01" / "ses-01" / "beh"
+        beh.mkdir(parents=True)
+        _make_flanker_csv(beh / "sub-s01_ses-01_task-flanker_beh.csv", n_trials=40)
+        func = tmp_path / "sub-s01" / "ses-01" / "func"
+        func.mkdir(parents=True)
+        _write_bold(func / "sub-s01_ses-01_task-flanker_run-1_bold.nii.gz", 40)
+
+        run_create_events(behavioral_dir=tmp_path / "sourcedata", bids_dir=tmp_path)
+
+        sidecar = json.loads((
+            tmp_path / "sourcedata" / "events_qc" / "sub-s01" / "ses-01"
+            / "sub-s01_ses-01_task-flanker_run-1_desc-truncation.json").read_text())
+        assert sidecar["NScanTestTrialsDropped"] == 26
+        assert abs(sidecar["FractionScanTestTrialsDropped"] - 26 / 40) < 1e-9
+        assert sidecar["ScanDurationSeconds"] is not None
+        # The non-monotonic metrics stay separate and untouched.
+        assert sidecar["FractionTestTrialsDropped"] == 0.0
