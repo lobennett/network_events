@@ -21,18 +21,14 @@ def test_run_refuses_when_sourcedata_is_empty(tmp_path):
         run_mod.run(behavioral_dir=tmp_path, bids_dir=tmp_path)
 
 
-def test_run_points_create_and_qc_at_sourcedata(tmp_path, monkeypatch):
+def test_run_points_create_at_sourcedata(tmp_path, monkeypatch):
     bids = _bids(tmp_path)
     seen = {}
     monkeypatch.setattr(run_mod, "migrate_out_scanner", lambda **k: seen.setdefault("mig", k))
     monkeypatch.setattr(run_mod, "run_create_events", lambda **k: seen.setdefault("create", k))
-    monkeypatch.setattr(run_mod, "run_qc", lambda **k: seen.setdefault("qc", k))
-    monkeypatch.setattr(run_mod, "run_trim", lambda **k: seen.setdefault("trim", k))
     run_mod.run(behavioral_dir=tmp_path, bids_dir=bids)
     assert seen["create"]["behavioral_dir"] == bids / "sourcedata"
-    assert seen["qc"]["behavioral_dir"] == bids / "sourcedata"
     assert seen["mig"]["subjects"] == {"s03"}
-    assert "trim" in seen
 
 
 def test_run_skips_survey_when_not_given(tmp_path, monkeypatch):
@@ -40,7 +36,7 @@ def test_run_skips_survey_when_not_given(tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(run_mod, "migrate_out_scanner", lambda **k: None)
     monkeypatch.setattr(run_mod, "migrate_survey", lambda **k: called.append(k))
-    for fn in ("run_create_events", "run_qc", "run_trim"):
+    for fn in ("run_create_events",):
         monkeypatch.setattr(run_mod, fn, lambda **k: None)
     run_mod.run(behavioral_dir=tmp_path, bids_dir=bids)
     assert called == []

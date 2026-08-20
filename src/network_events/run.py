@@ -1,4 +1,4 @@
-"""Orchestrate the behavioral half: cleaned sourcedata -> events + QC + trim.
+"""Orchestrate the behavioral half: cleaned sourcedata -> events.
 
 Pure + idempotent so an operator can wrap each invocation in `datalad run`.
 
@@ -14,8 +14,6 @@ from pathlib import Path
 
 from network_events.create import run_create_events
 from network_events.migrate import migrate_out_scanner, migrate_survey
-from network_events.qc import run_qc
-from network_events.trim import run_trim
 
 
 def subjects_in(sourcedata: Path) -> set[str]:
@@ -24,7 +22,7 @@ def subjects_in(sourcedata: Path) -> set[str]:
 
 
 def run(behavioral_dir, bids_dir, survey_root=None) -> None:
-    """Generate events for every cleaned in-scanner CSV, then QC and trim."""
+    """Generate events for every cleaned in-scanner CSV."""
     behavioral_dir, bids_dir = Path(behavioral_dir), Path(bids_dir)
     sourcedata = bids_dir / "sourcedata"
 
@@ -39,5 +37,3 @@ def run(behavioral_dir, bids_dir, survey_root=None) -> None:
         migrate_survey(survey_root=Path(survey_root), output_dir=sourcedata, subjects=subjects)
 
     run_create_events(behavioral_dir=sourcedata, bids_dir=bids_dir)
-    run_qc(behavioral_dir=sourcedata, bids_dir=bids_dir)
-    run_trim(bids_dir=bids_dir)

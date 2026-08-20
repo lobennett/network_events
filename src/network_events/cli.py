@@ -10,8 +10,6 @@ from pathlib import Path
 from network_events import migrate as _migrate_mod
 from network_events.run import subjects_in
 from network_events.create import run_create_events
-from network_events.qc import run_qc
-from network_events.trim import run_trim
 from network_events.run import run as _orchestrate
 
 
@@ -42,12 +40,6 @@ def _in_scanner(sourcedata):
 def _create(a):
     run_create_events(behavioral_dir=_in_scanner(a.sourcedata), bids_dir=Path(a.bids_dir))
 
-def _qc(a):
-    run_qc(behavioral_dir=_in_scanner(a.sourcedata), bids_dir=Path(a.bids_dir))
-
-def _trim(a):
-    run_trim(bids_dir=Path(a.bids_dir))
-
 def _run(a):
     _orchestrate(behavioral_dir=a.behavioral_dir, bids_dir=a.bids_dir,
                  survey_root=a.survey_root)
@@ -67,11 +59,6 @@ def main(argv=None):
 
     p = sub.add_parser("create"); p.add_argument("--sourcedata", required=True)
     p.add_argument("--bids-dir", required=True); p.set_defaults(func=_create)
-
-    p = sub.add_parser("qc"); p.add_argument("--sourcedata", required=True)
-    p.add_argument("--bids-dir", required=True); p.set_defaults(func=_qc)
-
-    p = sub.add_parser("trim"); p.add_argument("--bids-dir", required=True); p.set_defaults(func=_trim)
 
     p = sub.add_parser("run"); p.add_argument("--behavioral-dir", required=True)
     p.add_argument("--bids-dir", required=True)

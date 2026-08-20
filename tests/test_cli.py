@@ -34,17 +34,7 @@ def test_cli_routes_create(monkeypatch):
     cli.main(["create", "--sourcedata", "/s", "--bids-dir", "/b"])
     assert seen == {"src": "/s", "bids": "/b"}
 
-def test_cli_routes_qc(monkeypatch):
-    seen = {}
-    monkeypatch.setattr(cli, "_qc", lambda a: seen.update(src=a.sourcedata, bids=a.bids_dir))
-    cli.main(["qc", "--sourcedata", "/s", "--bids-dir", "/b"])
-    assert seen == {"src": "/s", "bids": "/b"}
 
-def test_cli_routes_trim(monkeypatch):
-    seen = {}
-    monkeypatch.setattr(cli, "_trim", lambda a: seen.update(bids=a.bids_dir))
-    cli.main(["trim", "--bids-dir", "/b"])
-    assert seen == {"bids": "/b"}
 
 def _write_manifest(path):
     path.write_text("subject\taction\ns03\tcopy\n")
