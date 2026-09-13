@@ -232,8 +232,10 @@ def test_stop_cleanup_does_not_classify_feedback_as_stop_outcomes(tmp_path, inhe
     source["stop_acc"] = np.where(source.key_press == source.correct_response, 1, 0)
     source["go_acc"] = source.stop_acc
     source["stim"] = "arrow"
+    # Raw stop exports label the inter-trial screen 'fixation'; only
+    # _rename_cells turns it into the canonical 'test_fixation'.
     source["trial_id"] = source.trial_id.replace({
-        "feedback_block": "practice-no-stop-feedback", "update_correct_response": "test_fixation",
+        "feedback_block": "practice-no-stop-feedback", "update_correct_response": "fixation",
     })
     source.to_csv(raw, index=False)
     _create(tmp_path)
@@ -242,13 +244,16 @@ def test_stop_cleanup_does_not_classify_feedback_as_stop_outcomes(tmp_path, inhe
     assert trials.trial_type.tolist() == ["go", "go", "stop_success", "stop_failure", "go"]
     assert trials.onset.tolist() == pytest.approx([1.57, 8.57, 15.57, 22.57, 24.57])
     nontrials = events[events.trial_id != "test_trial"]
-    assert not nontrials.trial_type.isin(["stop_success", "stop_failure"]).any()
-    if not inherited_conditions:
-        assert set(nontrials.trial_type) == {"n/a", "fixation"}
-    else:
-        assert nontrials.trial_type.tolist() == ["go", "stop", "stop", "fixation", "n/a"]
-    # The stop cleanup already scopes outcome classification correctly. It
-    # does NOT promise to clear arbitrary inherited raw 'go'/'stop' labels.
+    assert nontrials.trial_id.tolist() == ["break", "break", "break", "test_fixation", "break"]
+    # Breaks carry no condition and the fixation keeps its own named type,
+    # whether or not the raw export left a go/stop label on those rows.
+    assert nontrials.trial_type.tolist() == ["n/a", "n/a", "n/a", "fixation", "n/a"]
+    assert nontrials.onset.tolist() == pytest.approx([2.57, 9.57, 16.57, 23.57, 25.57])
+    assert nontrials.duration.tolist() == [6.0, 6.0, 6.0, 1.0, 6.0]
+    # The raw condition column survives as provenance.
+    assert nontrials.stop_signal_condition.tolist() == (
+        ["go", "stop", "stop", "go", "n/a"] if inherited_conditions else ["n/a"] * 5
+    )
     assert json.loads(qc.read_text())["NTestTrialsRetained"] == 5
 
 

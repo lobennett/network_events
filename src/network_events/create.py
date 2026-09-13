@@ -61,6 +61,24 @@ _RENAME_CELLS_LOOKUP = {
 }
 
 
+# Cued-task-switching exp_ids (both the ``__fmri`` spelling and the bare alias)
+# whose ``test_cue`` row shows the upcoming task cue and admits no response, so
+# any raw ``correct_response`` on it is meaningless.
+_CUE_RESPONSE_PLACEHOLDER_EXP_IDS = frozenset({
+    "cued_task_switching_single_task_network__fmri",
+    "cued_task_switching_with_directed_forgetting__fmri",
+    "spatial_task_switching_with_cued_task_switching__fmri",
+    "flanker_with_cued_task_switching__fmri",
+    "flanker_with_cued_task_switching",
+    "shape_matching_with_cued_task_switching__fmri",
+    "shape_matching_with_cued_task_switching",
+})
+
+# Non-trial rows that mark a rest/feedback screen rather than a modeled event.
+# ``add_cols`` copies whatever condition column the raw export left on them.
+_BREAK_TRIAL_IDS = ("break", "break_with_performance_feedback")
+
+
 def _rename_cells(df: pd.DataFrame, exp_id: str) -> pd.DataFrame:
     change = _RENAME_CELLS_LOOKUP.get(exp_id)
     if change is None:
@@ -68,7 +86,7 @@ def _rename_cells(df: pd.DataFrame, exp_id: str) -> pd.DataFrame:
         return df
     for key, value in change.items():
         df["trial_id"] = df["trial_id"].replace(key, value)
-    if "cued_task_switching" in exp_id:
+    if exp_id in _CUE_RESPONSE_PLACEHOLDER_EXP_IDS:
         df["correct_response"] = df["correct_response"].astype(object)
         df.loc[df["trial_id"] == "test_cue", "correct_response"] = "n/a"
     return df
@@ -204,9 +222,11 @@ def _build_events_df(filename: Path, short_name: str,
     df = cal_time_elapsed(df)
     df = add_choice_acc(df)
     df = add_cols(df, exp_id)
+    # Standardize trial_id first: the task cleanups key off canonical ids
+    # (test_fixation, break), which only exist after this rename.
+    df = _rename_cells(df, exp_id)
     df = response_time_and_junk(df, short_name)
     df = _set_default_event_cols(df, offset_s)
-    df = _rename_cells(df, exp_id)
 
     # cuedTSWFlanker: the cued-task-switch factor (composite trial_type +
     # cue_condition/task_condition) lands only on the test_cue row, while the
@@ -251,6 +271,10 @@ def _build_events_df(filename: Path, short_name: str,
     for index in indices_to_change:
         if index in df.index:
             df.loc[index, "trial_id"] = "break_with_performance_feedback"
+
+    # A break shows no stimulus to classify, so any condition it inherited is
+    # provenance only; the source column keeps it, trial_type must not.
+    df.loc[df["trial_id"].isin(_BREAK_TRIAL_IDS), "trial_type"] = "n/a"
 
     return df
 

@@ -30,13 +30,14 @@ def _te(onset_s: float) -> float:
     return _TRIGGER_MS + _BLOCK_MS + _DUMMY_MS + onset_s * 1000.0
 
 
-def _write_cued_ts_flanker_csv(path, cue_switch_pairs, flankers):
+def _write_cued_ts_flanker_csv(path, cue_switch_pairs, flankers, cue_correct_response=np.nan):
     """Raw flanker_with_cued_task_switching export.
 
     The cued-task-switch factor (cue_condition / task_condition) lives ONLY on
     the ``test_cue`` row; ``flanker_condition`` is on both the cue and the
     following ``test_trial`` row. Rows are ordered cue-then-trial per trial, as
-    in the real export.
+    in the real export. ``cue_correct_response`` plants a raw value on the cue
+    row, which admits no response.
     """
     exp_id = "flanker_with_cued_task_switching"
     trig = {
@@ -66,7 +67,7 @@ def _write_cued_ts_flanker_csv(path, cue_switch_pairs, flankers):
                 "rt": -1,
                 "stim_duration": 500.0,
                 "key_press": -1,
-                "correct_response": np.nan,
+                "correct_response": cue_correct_response,
                 "flanker_condition": flk,
                 "cue": "Parity",
                 "task_condition": task_cond,
@@ -208,3 +209,28 @@ class TestNBackWSpatialTSTrialTypeLowercase:
             "match_tswitch_cswitch",
             "mismatch_tswitch_cswitch",
         }
+
+
+class TestCuedTSWFlankerCueResponsePlaceholder:
+    def test_cue_rows_take_the_no_response_placeholder(self, tmp_path):
+        """The bare alias gets the same cue placeholder as the ``__fmri`` spelling."""
+        from network_events.create import create_events_df
+
+        raw = _write_cued_ts_flanker_csv(
+            tmp_path / "raw_cuedtsflanker_cueresp.csv",
+            cue_switch_pairs=[("switch", "stay"), ("stay", "stay")],
+            flankers=["incongruent", "congruent"],
+            cue_correct_response=71.0,
+        )
+        events = create_events_df(raw, "flankerWCuedTS").reset_index(drop=True)
+
+        cues = events[events["trial_id"] == "test_cue"]
+        trials = events[events["trial_id"] == "test_trial"]
+        assert len(cues) == 2 and len(trials) == 2
+        # A cue screen accepts no response, so its raw correct_response is
+        # replaced rather than emitted as a modelable answer.
+        assert cues["correct_response"].tolist() == ["n/a", "n/a"]
+        assert trials["correct_response"].tolist() == [71.0, 71.0]
+        # The placeholder is cosmetic: accuracy was already scored from raw values.
+        assert cues["acc"].tolist() == [0, 0]
+        assert trials["acc"].tolist() == [1, 1]
