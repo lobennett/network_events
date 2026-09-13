@@ -68,7 +68,7 @@ def _rename_cells(df: pd.DataFrame, exp_id: str) -> pd.DataFrame:
         return df
     for key, value in change.items():
         df["trial_id"] = df["trial_id"].replace(key, value)
-    if "cued_task_switching_" in exp_id:
+    if "cued_task_switching" in exp_id:
         df["correct_response"] = df["correct_response"].astype(object)
         df.loc[df["trial_id"] == "test_cue", "correct_response"] = "n/a"
     return df
@@ -141,7 +141,7 @@ def _scan_overrun(df: pd.DataFrame, scan_s: float | None):
 
 
 def _set_default_event_cols(df: pd.DataFrame, offset_s: float = DUMMY_OFFSET_S) -> pd.DataFrame:
-    df = df[df.time_elapsed > 0]
+    df = df[df.time_elapsed >= 0]
     df = df.rename(columns={"time_elapsed": "onset", "choice_acc": "acc", "stim_duration": "duration", "rt": "response_time"})
     df["onset"] = df["onset"] / 1000
     df["duration"] = df["duration"] / 1000
@@ -158,7 +158,9 @@ def _set_default_event_cols(df: pd.DataFrame, offset_s: float = DUMMY_OFFSET_S) 
     return df
 
 
-def _flagged_feedback(text_content: str) -> bool:
+def _flagged_feedback(text_content: object) -> bool:
+    if not isinstance(text_content, str):
+        return False
     keywords = ["accuracy", "slowly", "respond", "response"]
     return any(keyword in text_content.lower() for keyword in keywords)
 
@@ -185,7 +187,7 @@ def _get_rows_with_feedback(df: pd.DataFrame, original_df: pd.DataFrame):
         feedback_block_rows = original_df[stimulus_col.str.contains("completed", na=False)]
     indices_to_change = []
     for index, row in feedback_block_rows.iterrows():
-        stimulus = row["stimulus"]
+        stimulus = row.get("stimulus")
         if _flagged_feedback(stimulus):
             indices_to_change.append(index)
     return feedback_block_rows, indices_to_change
@@ -484,9 +486,13 @@ def run_create_events(
                     df = create_empty_events_df()
 
                 df.to_csv(outpath, sep="\t", index=False, na_rep="n/a")
+                sidecar_path = truncation_sidecar_path(
+                    bids_dir, sub_dir.name, ses_dir.name, task_name, run_num
+                )
                 if tstats is not None:
-                    sidecar_path = truncation_sidecar_path(
-                        bids_dir, sub_dir.name, ses_dir.name, task_name, run_num
-                    )
                     _write_truncation_sidecar(sidecar_path, tstats)
+                else:
+                    # An empty fallback TSV cannot carry a previous run's
+                    # successful retention counts after conversion fails.
+                    sidecar_path.unlink(missing_ok=True)
                 tasks_with_events.add(task_name)

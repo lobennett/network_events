@@ -17,9 +17,11 @@ def get_neg_rt_correction(df: pd.DataFrame) -> pd.DataFrame:
     df.dropna(subset=["block_duration"], inplace=True)
     negative_rt = df.loc[df["rt"] < -1]
     if not negative_rt.empty:
-        i = df.loc[df.rt < -1].index.values.astype(int)[0]
-        trial_before = df.loc[i - 1]["time_elapsed"]
-        problematic = df.loc[i:]
+        i = np.flatnonzero(df["rt"] < -1)[0]
+        if i == 0:
+            raise ValueError("Cannot correct negative RT without a preceding timed row")
+        trial_before = df.iloc[i - 1]["time_elapsed"]
+        problematic = df.iloc[i:]
         block_durations = problematic["block_duration"].to_list()
         new_time_elapsed = []
         for n in range(len(block_durations)):
@@ -28,7 +30,7 @@ def get_neg_rt_correction(df: pd.DataFrame) -> pd.DataFrame:
                 trial_before = trial_before + block_durations[n]
             else:
                 new_time_elapsed.append(np.nan)
-        new_time = df.loc[: i - 1].time_elapsed.to_list() + new_time_elapsed
+        new_time = df.iloc[:i].time_elapsed.to_list() + new_time_elapsed
         df["time_elapsed"] = new_time
     return df
 
@@ -106,6 +108,7 @@ _TRIAL_TYPE_LOOKUP = {
     "shape_matching_with_spatial_task_switching__fmri": ["predictable_condition", "shape_matching_condition"],
     "shape_matching_with_spatial_task_switching": ["predictable_condition", "shape_matching_condition"],
     "shape_matching_with_cued_task_switching__fmri": ["task_condition", "cue_condition", "shape_matching_condition"],
+    "shape_matching_with_cued_task_switching": ["task_condition", "cue_condition", "shape_matching_condition"],
     "n_back_with_spatial_task_switching__fmri": ["n_back_condition", "task_switch_condition"],
 }
 
@@ -130,7 +133,7 @@ def add_cols(df: pd.DataFrame, exp_id: str) -> pd.DataFrame:
             df2["trial_type"] = "t" + df[trial_types[0]] + "_c" + df[trial_types[1]]
         elif exp_id == "cued_task_switching_with_directed_forgetting__fmri":
             df2["trial_type"] = df[trial_types[0]] + "_t" + df[trial_types[1]] + "_c" + df[trial_types[2]]
-        elif exp_id == "shape_matching_with_cued_task_switching__fmri":
+        elif exp_id in ("shape_matching_with_cued_task_switching__fmri", "shape_matching_with_cued_task_switching"):
             df2["trial_type"] = "t" + df[trial_types[0]] + "_c" + df[trial_types[1]]
         elif exp_id == "flanker_with_cued_task_switching__fmri":
             df2["trial_type"] = "c" + df[trial_types[0]] + "_t" + df[trial_types[1]] + "_" + df[trial_types[2]]
@@ -176,15 +179,24 @@ def _cleanup_stop_signal(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _cleanup_go_nogo(df: pd.DataFrame) -> pd.DataFrame:
-    choice_acc_str = df["choice_acc"].astype(str)
+    df = df.copy()
+    df["trial_type"] = df["trial_type"].astype(object)
+    mask = df["trial_id"] == "test_trial"
+    trial_rows = df[mask]
+    choice_acc_str = trial_rows["choice_acc"].astype(str)
     conditions = [
-        (df["trial_type"] == "nogo") & (choice_acc_str == "1"),
-        (df["trial_type"] == "nogo") & (choice_acc_str == "0"),
-        (df["trial_type"] == "go"),
+        (trial_rows["trial_type"] == "nogo") & (choice_acc_str == "1"),
+        (trial_rows["trial_type"] == "nogo") & (choice_acc_str == "0"),
+        (trial_rows["trial_type"] == "go"),
     ]
     values = ["nogo_success", "nogo_failure", "go"]
     result = np.select(conditions, values, default="unknown")
-    df["trial_type"] = pd.Series(result).astype(object)
+    # Assign against the retained CSV index: untimed metadata rows may have
+    # been dropped, and feedback detection still uses the original row labels.
+    df.loc[mask, "trial_type"] = result
+    # Feedback/fixation rows can inherit the preceding trial's raw condition.
+    # Keep that source column, but never label these rows as modeled trials.
+    df.loc[~mask, "trial_type"] = np.nan
     return df
 
 

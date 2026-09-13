@@ -100,4 +100,5 @@ pull requests. Tests generate synthetic behavioural CSVs, NIfTIs, and directory 
 no participant data or cluster access is needed. This checks software behaviour,
 not acquisition-data validation or the full `network_fmri` pipeline on Sherlock.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[event-generation code review](docs/CODE-REVIEW.md) for regression evidence and limits.
