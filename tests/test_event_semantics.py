@@ -322,3 +322,92 @@ def test_go_nogo_unknown_trial_conditions_remain_unknown(tmp_path, condition):
     assert events.loc[events.trial_id == "test_trial", "trial_type"].tolist() == ["unknown"] * 5
     assert events.loc[events.trial_id != "test_trial", "trial_type"].tolist() == ["n/a"] * 5
     assert json.loads(qc.read_text())["NTestTrialsRetained"] == 5
+
+
+def _write_stop_dual_csv(path, exp_id, rows, shared):
+    """Raw dual stop export: a trigger, a dropped lead-in, then ``rows``.
+
+    ``rows`` are ``(trial_id, duration_ms, fields)`` in presentation order and
+    use the package's block-end clock, so each event's onset is the previous
+    event's end. The lead-in absorbs the discarded-volume shift.
+    """
+    base = {"exp_id": exp_id, "stimulus": np.nan, **{k: np.nan for k in shared}}
+    out = [{
+        **base, "trial_id": "fmri_trigger_initial", "time_elapsed": 5000,
+        "block_duration": 100, "stim_duration": 0, "rt": 0,
+        "key_press": -1, "correct_response": -1,
+    }]
+    elapsed = 5000
+    for trial_id, duration, fields in [(rows[0][0], 12000, {})] + list(rows):
+        elapsed += duration
+        out.append({
+            **base, "trial_id": trial_id, "time_elapsed": elapsed,
+            "block_duration": duration, "stim_duration": duration,
+            "rt": -1, "key_press": -1, "correct_response": -1, **fields,
+        })
+    pd.DataFrame(out).to_csv(path, index=False)
+    return path
+
+
+def test_stop_flanker_raw_fixation_label_is_canonicalized_before_cleanup(tmp_path):
+    raw, tsv, qc = _canonical_run(tmp_path, task="stopSignalWFlanker")
+    go = {"stop_signal_condition": "go", "flanker_condition": "congruent", "stop_acc": 1}
+    stop = {"stop_signal_condition": "stop", "flanker_condition": "incongruent", "stop_acc": 1}
+    _write_stop_dual_csv(
+        raw, "stop_signal_with_flanker__fmri",
+        # The raw export names the inter-trial screen 'fixation'.
+        [("fixation", 1000, go),
+         ("test_trial", 1000, {**go, "key_press": 37, "correct_response": 37, "rt": 450}),
+         ("fixation", 1000, stop),
+         ("test_trial", 1000, stop),
+         ("feedback_block", 6000, {**stop, "stimulus": "You completed a block."})],
+        shared=["SS_delay", "SS_duration", "stop_signal_condition",
+                "flanker_condition", "SSD_congruent", "SSD_incongruent", "stop_acc"],
+    )
+    _create(tmp_path)
+    events = pd.read_csv(tsv, sep="\t", keep_default_na=False)
+    assert events.trial_id.tolist() == [
+        "test_fixation", "test_trial", "test_fixation", "test_trial", "break",
+    ]
+    assert events.trial_type.tolist() == [
+        "fixation", "go_congruent", "fixation", "stop_success_incongruent", "n/a",
+    ]
+    assert events.onset.tolist() == pytest.approx([1.57, 2.57, 3.57, 4.57, 5.57])
+    assert events.duration.tolist() == [1.0, 1.0, 1.0, 1.0, 6.0]
+    assert json.loads(qc.read_text())["NTestTrialsRetained"] == 2
+
+
+def test_stop_directed_forgetting_keeps_named_memory_phases(tmp_path):
+    raw, tsv, qc = _canonical_run(tmp_path, task="stopSignalWDirectedForgetting")
+    go = {"stop_signal_condition": "go", "directed_forgetting_condition": "con", "stop_acc": 1}
+    _write_stop_dual_csv(
+        raw, "stop_signal_with_directed_forgetting__fmri",
+        # This task uses two raw fixation spellings; both are canonical
+        # test_fixation. The letter set and the forget cue are separate events.
+        [("ITI_fixation", 1000, go),
+         ("stim", 2000, go),
+         ("cue", 1000, go),
+         ("fixation", 1000, go),
+         ("test_trial", 1000, {**go, "key_press": 37, "correct_response": 37, "rt": 450}),
+         ("feedback_block", 6000, {**go, "stimulus": "You completed a block."})],
+        shared=["SS_delay", "SS_duration", "stop_signal_condition",
+                "directed_forgetting_condition", "stop_acc"],
+    )
+    _create(tmp_path)
+    events = pd.read_csv(tsv, sep="\t", keep_default_na=False)
+    assert events.trial_id.tolist() == [
+        "test_fixation", "test_stim", "test_cue", "test_fixation", "test_trial", "break",
+    ]
+    # The memory phases keep the raw condition they inherited; outcome
+    # classification is confined to test_trial and never labels a cue.
+    assert events.trial_type.tolist() == [
+        "fixation", "go_con", "go_con", "fixation", "go_con", "n/a",
+    ]
+    assert "memory_cue" not in set(events.trial_type)
+    # The GLM's memory_and_cue regressor selects these two rows by trial_id and
+    # uses their recorded durations, whatever trial_type they carry.
+    memory = events[events.trial_id.isin(["test_stim", "test_cue"])]
+    assert memory.duration.tolist() == [2.0, 1.0]
+    assert memory.onset.tolist() == pytest.approx([2.57, 4.57])
+    assert events.onset.tolist() == pytest.approx([1.57, 2.57, 4.57, 5.57, 6.57, 7.57])
+    assert json.loads(qc.read_text())["NTestTrialsRetained"] == 1

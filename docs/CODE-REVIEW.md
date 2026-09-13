@@ -101,11 +101,17 @@ columns, and response-sentinel contracts; they are not participant exports.
    cleanup scoped it — four of twenty-one declared exp_ids have a cleanup at
    all. `break` and `break_with_performance_feedback` rows now get
    `trial_type=n/a` at a single shared boundary in `_build_events_df`, after
-   feedback identification. This is deliberately limited to breaks: named cues
-   (`test_cue`) and fixations keep their own event types, and `test_trial`
-   classification is untouched. The source condition column is still emitted as
-   provenance. The stop regression covers this with and without inherited raw
-   `go`/`stop` labels.
+   feedback identification. This is deliberately limited to breaks: every other
+   event keeps its canonical `trial_id`, timing and source columns, and
+   `test_trial` classification is untouched. Event *identity* is the `trial_id`;
+   `trial_type` is the condition label, and the two are scoped separately. A
+   non-trial row's `trial_type` is therefore not uniform across the battery —
+   stop fixations read `fixation`, go/no-go nontrials read `n/a`, and a task
+   with no cleanup keeps whatever condition `add_cols` copied on. No inspected
+   consumer requires one battery-wide non-trial condition vocabulary, so none
+   was invented. The source condition column is still emitted as provenance. The
+   stop regression covers this with and without inherited raw `go`/`stop`
+   labels.
 
 10. **A widened substring silently changed a second task.** Relaxing
     `"cued_task_switching_" in exp_id` to `"cued_task_switching"` for the cue
@@ -118,12 +124,55 @@ columns, and response-sentinel contracts; they are not participant exports.
     The cuedTSWFlanker fixture previously left the cue's `correct_response`
     null, which masked the change; a new case plants a real raw value on the cue
     row, asserts it is replaced, and asserts the trial row's response and the
-    already-scored accuracy are unaffected.
+    already-scored accuracy are unaffected. This closed the *placeholder*
+    divergence only; the `trial_type` divergence for the same aliases is item 11.
+
+11. **Declared aliases emitted a different `trial_type` vocabulary.** Several
+    exp_ids are declared in both a `__fmri` and a bare spelling, and the
+    acquisition writes whichever one that experiment's `experiment.js` happens
+    to set — so both name the same task and both must satisfy the same
+    downstream selector. Two pairs diverged, in opposite directions:
+
+    * `flanker_with_cued_task_switching__fmri` folded the flanker factor into
+      the composite (`cswitch_tstay_incongruent`) and shifted it by one row,
+      while the bare spelling emitted `switch_stay` with `flanker_condition` in
+      its own column. The GLM config crosses those two columns into its six
+      cells, so the suffixed spelling matched none of them. The suffixed
+      special-case and its `shift(1)` are removed; both spellings now take the
+      generic two-factor path plus the existing cue→trial propagation in
+      `_build_events_df`, which fills only missing trial-row values.
+    * `shape_matching_with_spatial_task_switching` (bare) kept the
+      acquisition's `td_{same,diff,na}` task-dimension prefix
+      (`td_same_tstay_cswitch_SSS`), which the suffixed spelling strips. The GLM
+      config names the 21 switch-by-shape cells without it, so the bare
+      spelling matched none of them. The strip now applies to both spellings.
+      The bare spelling was also missing from `_RENAME_CELLS_LOOKUP`, so its
+      `feedback_block` never became `break` and the item-9 boundary could not
+      see it; its rename map is added.
+
+    Both corrections preserve onsets, durations, responses and the separate
+    source columns; no factor is added or dropped. The regressions run raw CSVs
+    through `create_events_df`, serialize to TSV, reload as the GLM runner does,
+    and evaluate that config's literal `subset` expressions with
+    `DataFrame.query` — six flanker cells and all 21 shape cells, once each, for
+    both spellings, plus ordinary-break and performance-feedback
+    counterfactuals. Testing only one spelling per pair masked all of this.
+
+12. **A dead `memory_cue` branch.** `_cleanup_stop_signal_w_directed_forgetting`
+    ended with a `trial_type == "memory_cue"` condition that cannot fire: the
+    mask restricts it to `test_trial`, the forget cue is renamed `test_cue`, and
+    `add_cols` builds this task's `trial_type` as
+    `stop_signal_condition_directed_forgetting_condition`. Removed without
+    behavior change. It is not a missing regressor: the GLM selects the letter
+    set and the forget cue by `trial_id` (`test_stim`/`test_cue`) and uses their
+    recorded durations regardless of `trial_type`. A new control walks the raw
+    ITI → letter set → cue → fixation → probe sequence and checks those rows
+    survive with 2 s and 1 s durations and are never relabelled.
 
 ## Checks and contradictory evidence
 
 Baseline: **48 tests passed despite the reproduced defects**. After the changes:
-**70 tests passed**, including 22 new cases. Each corrected failure was observed
+**80 tests passed**, including 32 new cases. Each corrected failure was observed
 before its fix; controls exercise the corresponding masking conditions.
 
 ```bash
@@ -149,6 +198,14 @@ sanitizer — any *other* non-trial id in a task without a cleanup keeps whateve
 condition `add_cols` copied onto it — so downstream readers still need trial-ID
 guards, including for already-written event files.
 
+Both dual stop tasks are now exercised from their raw fixation spellings as
+rename-order controls: `stop_signal_with_flanker__fmri` from `fixation`, and
+`stop_signal_with_directed_forgetting__fmri` from both `ITI_fixation` and
+`fixation`. Fixation is not uniformly a no-response interval in the acquisition
+— the first go/no-go test block and the stop/DF ITI accept keys — so recorded
+responses on those rows are left alone and trial status is not inferred from
+key availability.
+
 The combined-cut control begins with five true trials, keeps two after the clock
 cut, and loses one of those two to scan clipping: fractions `0.6` and `0.5`,
 respectively. The final retained break keeps its six-second duration even when
@@ -171,7 +228,10 @@ in the exercised cases and were preserved.
   scoping keys off the canonical `break` ids, so a task whose rest screen is
   named something else is out of its reach; clearing `trial_type` on every
   non-`test_trial` row instead would also erase named cues and fixations and was
-  not selected.
+  not selected. Alias parity is resolved per pair against that task's existing
+  selector, not by treating the `__fmri` spelling as authoritative; for
+  shape/spatial the bare spelling's historical export provenance was not
+  established, and it is corrected as a declared alias of the same task.
 - Truncation metrics begin after onset/dummy filtering. `NTestTrialsRetained`
   describes the clock cut, before scan clipping; `ScanDurationSeconds=null` means
   scan clipping could not be measured. A failed conversion now has no sidecar,

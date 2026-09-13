@@ -135,18 +135,16 @@ def add_cols(df: pd.DataFrame, exp_id: str) -> pd.DataFrame:
             df2["trial_type"] = df[trial_types[0]] + "_t" + df[trial_types[1]] + "_c" + df[trial_types[2]]
         elif exp_id in ("shape_matching_with_cued_task_switching__fmri", "shape_matching_with_cued_task_switching"):
             df2["trial_type"] = "t" + df[trial_types[0]] + "_c" + df[trial_types[1]]
-        elif exp_id == "flanker_with_cued_task_switching__fmri":
-            df2["trial_type"] = "c" + df[trial_types[0]] + "_t" + df[trial_types[1]] + "_" + df[trial_types[2]]
         elif exp_id == "n_back_with_shape_matching__fmri":
             df2["trial_type"] = df[trial_types[0]] + "_" + df[trial_types[1]] + "_" + df[trial_types[2]].astype(str) + "back"
             df2["trial_type"] = df2["trial_type"].str.replace(".0back", "back")
         else:
             df2["trial_type"] = df[trial_types[0]] + "_" + df[trial_types[1]]
-    if exp_id == "flanker_with_cued_task_switching__fmri":
-        df2["trial_type"] = df2["trial_type"].shift(1)
     if len(trial_types) == 1:
         df2["trial_type"] = df[trial_types[0]]
-    if exp_id == "shape_matching_with_spatial_task_switching__fmri":
+    if exp_id in ("shape_matching_with_spatial_task_switching__fmri", "shape_matching_with_spatial_task_switching"):
+        # Drop the acquisition's td_{same,diff,na} task-dimension prefix; the
+        # modeled cells are switch-by-shape (e.g. tstay_cswitch_SSS).
         df2["trial_type"] = df2["trial_type"].str.split("_").str[2:].str.join("_")
     if exp_id == "spatial_task_switching_single_task_network__fmri":
         final = final.rename(columns={"predictable_dimension": "task_set"})
@@ -213,9 +211,8 @@ def _cleanup_stop_signal_w_directed_forgetting(df: pd.DataFrame) -> pd.DataFrame
         (trial_rows["stop_signal_condition"] == "stop") & (trial_rows["directed_forgetting_condition"] == "con") & (trial_rows["stop_acc"] == 0),
         (trial_rows["stop_signal_condition"] == "stop") & (trial_rows["directed_forgetting_condition"] == "pos") & (trial_rows["stop_acc"] == 0),
         (trial_rows["stop_signal_condition"] == "stop") & (trial_rows["directed_forgetting_condition"] == "neg") & (trial_rows["stop_acc"] == 0),
-        (trial_rows["trial_type"] == "memory_cue"),
     ]
-    values = ["go_con", "go_pos", "go_neg", "stop_success_con", "stop_success_pos", "stop_success_neg", "stop_failure_con", "stop_failure_pos", "stop_failure_neg", "memory_cue"]
+    values = ["go_con", "go_pos", "go_neg", "stop_success_con", "stop_success_pos", "stop_success_neg", "stop_failure_con", "stop_failure_pos", "stop_failure_neg"]
     result = np.select(conditions, values, default="unknown")
     df.loc[mask, "trial_type"] = result
     fixation_mask = df["trial_id"] == "test_fixation"

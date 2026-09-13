@@ -55,6 +55,7 @@ _RENAME_CELLS_LOOKUP = {
     "flanker_with_cued_task_switching": {"practice-stop-feedback": "break"},
     "n_back_with_shape_matching__fmri": {"feedback_block": "break", "fixation": "test_fixation"},
     "shape_matching_with_spatial_task_switching__fmri": {"feedback_block": "break", "fixation": "test_fixation"},
+    "shape_matching_with_spatial_task_switching": {"feedback_block": "break", "fixation": "test_fixation"},
     "shape_matching_with_cued_task_switching__fmri": {"fixation": "test_fixation", "cue": "test_cue", "feedback_block": "break"},
     "shape_matching_with_cued_task_switching": {"fixation": "test_fixation", "cue": "test_cue", "feedback_block": "break"},
     "n_back_with_spatial_task_switching__fmri": {"feedback_block": "break", "fixation": "test_fixation"},
@@ -230,12 +231,11 @@ def _build_events_df(filename: Path, short_name: str,
 
     # cuedTSWFlanker: the cued-task-switch factor (composite trial_type +
     # cue_condition/task_condition) lands only on the test_cue row, while the
-    # modeled test_trial row carries just flanker_condition. (The exp_id lacks
-    # the "__fmri" suffix the add_cols special-case checks, so its shift never
-    # fires.) Propagate the switch factor from each test_cue onto the
-    # immediately following test_trial, only where the test_trial value is
-    # missing — so test_trial rows carry the switch trial_type like every other
-    # dual task.
+    # modeled test_trial row carries just flanker_condition. Propagate the
+    # switch factor from each test_cue onto the immediately following
+    # test_trial, only where the test_trial value is missing — so test_trial
+    # rows carry the switch trial_type like every other dual task, and the
+    # flanker factor stays in its own column for the GLM to cross.
     if "flanker_with_cued_task_switching" in exp_id:
         is_cue = df["trial_id"] == "test_cue"
         is_trial = df["trial_id"] == "test_trial"
