@@ -143,9 +143,9 @@ def add_cols(df: pd.DataFrame, exp_id: str) -> pd.DataFrame:
     if len(trial_types) == 1:
         df2["trial_type"] = df[trial_types[0]]
     if exp_id in ("shape_matching_with_spatial_task_switching__fmri", "shape_matching_with_spatial_task_switching"):
-        # Drop the acquisition's td_{same,diff,na} task-dimension prefix; the
-        # modeled cells are switch-by-shape (e.g. tstay_cswitch_SSS).
-        df2["trial_type"] = df2["trial_type"].str.split("_").str[2:].str.join("_")
+        # Drop only the acquisition's known task-dimension prefix; keep
+        # already-normalized switch-by-shape cells and other text intact.
+        df2["trial_type"] = df2["trial_type"].str.replace(r"^td_(?:same|diff|na)_", "", regex=True)
     if exp_id == "spatial_task_switching_single_task_network__fmri":
         final = final.rename(columns={"predictable_dimension": "task_set"})
     if exp_id == "cued_task_switching_with_directed_forgetting__fmri":

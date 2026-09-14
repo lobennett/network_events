@@ -15,8 +15,8 @@ Composite-condition tasks need post-processing beyond the generic
     composite ``trial_type`` on ``test_trial`` rows must be lowercased for
     consistent cells.
 
-Several exp_ids are declared in both a ``__fmri`` and a bare spelling. Both are
-the same acquisition, so both must emit the vocabulary the downstream GLM task
+Several exp_ids are declared in both a ``__fmri`` and a bare spelling. As declared
+aliases, both must emit the vocabulary the downstream GLM task
 config already selects on. ``_GLM_*_SUBSETS`` below are the literal ``subset``
 expressions from that config, evaluated with ``DataFrame.query`` exactly as the
 consumer does; they are quoted here because this repository does not depend on
@@ -407,3 +407,36 @@ def test_shape_spatial_ts_aliases_scope_their_breaks(tmp_path, suffix):
     assert breaks.duration.tolist() == [6.0, 6.0]
     assert len(tsv.query(_GLM_SHAPE_SUBSET.format(cell="tswitch_cswitch_DDS"))) == 1
     assert len(tsv.query(_GLM_PERFORMANCE_FEEDBACK_SUBSET)) == 1
+
+
+@pytest.mark.parametrize("suffix", ["__fmri", ""])
+@pytest.mark.parametrize("condition, expected", [
+    ("td_same_tstay_cswitch", "tstay_cswitch_SSS"),
+    ("td_diff_tstay_cswitch", "tstay_cswitch_SSS"),
+    ("td_na_tstay_cswitch", "tstay_cswitch_SSS"),
+    ("tstay_cswitch", "tstay_cswitch_SSS"),
+    ("td_other_tstay_cswitch", "td_other_tstay_cswitch_SSS"),
+    ("legacy_td_same_tstay_cswitch", "legacy_td_same_tstay_cswitch_SSS"),
+])
+def test_shape_spatial_aliases_strip_only_acquisition_prefix(tmp_path, suffix, condition, expected):
+    from tests.test_event_semantics import _canonical_run, _create
+
+    raw, output, _ = _canonical_run(tmp_path, task="spatialTSWShapeMatching")
+    _write_shape_spatial_ts_csv(raw, suffix=suffix)
+    # Minimal trigger + genuine trial, varying only the raw condition field.
+    frame = pd.read_csv(raw).iloc[:2].copy()
+    frame.loc[1, "predictable_condition"] = condition
+    frame.to_csv(raw, index=False)
+
+    _create(tmp_path)
+    events = pd.read_csv(output, sep="\t")
+    assert events.trial_id.tolist() == ["test_trial"]
+    assert events.trial_type.tolist() == [expected]
+    assert events.onset.tolist() == pytest.approx([5.0])
+    assert events.duration.tolist() == [1.0]
+    assert events.response_time.tolist() == [0.7]
+    assert events.key_press.tolist() == events.correct_response.tolist() == [71.0]
+    assert events.acc.tolist() == [1]
+    assert events.shape_matching_condition.tolist() == ["SSS"]
+    subset = _GLM_SHAPE_SUBSET.format(cell="tstay_cswitch_SSS")
+    assert len(events.query(subset)) == (1 if expected == "tstay_cswitch_SSS" else 0)

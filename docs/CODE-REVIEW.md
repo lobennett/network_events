@@ -98,7 +98,7 @@ columns, and response-sentinel contracts; they are not participant exports.
 
 9. **Breaks kept the preceding trial's condition on every task.** `add_cols`
    copies a condition column onto rest/feedback rows, and only the go/no-go
-   cleanup scoped it — four of twenty-one declared exp_ids have a cleanup at
+   cleanup scoped it — four of twenty-two declared exp_ids have a cleanup at
    all. `break` and `break_with_performance_feedback` rows now get
    `trial_type=n/a` at a single shared boundary in `_build_events_df`, after
    feedback identification. This is deliberately limited to breaks: every other
@@ -169,10 +169,23 @@ columns, and response-sentinel contracts; they are not participant exports.
     ITI → letter set → cue → fixation → probe sequence and checks those rows
     survive with 2 s and 1 s durations and are never relabelled.
 
+13. **Prefix removal erased already-normalized switch factors.** After alias
+    parity was restored, the shape/spatial path still dropped the first two
+    tokens unconditionally. A minimal trigger-plus-trial CSV with
+    `predictable_condition=tstay_cswitch` and shape `SSS` emitted only `SSS`,
+    matching none of the intended switch-by-shape cells. It now removes only
+    an anchored `td_same_`, `td_diff_`, or `td_na_` prefix. Twelve real-CLI cases
+    cover both aliases: the three acquisition prefixes mask the old defect,
+    while normalized values, unknown prefixes and a non-leading `td_same_`
+    expose it. Six cases failed before the fix; all now preserve the expected
+    label, timing and behavioral columns. Unknown text remains unmodeled rather
+    than being coerced into an existing cell. This counterfactual does not
+    establish how often normalized raw exports occur in participant data.
+
 ## Checks and contradictory evidence
 
 Baseline: **48 tests passed despite the reproduced defects**. After the changes:
-**80 tests passed**, including 32 new cases. Each corrected failure was observed
+**92 tests passed**, including 44 new cases. Each corrected failure was observed
 before its fix; controls exercise the corresponding masking conditions.
 
 ```bash
@@ -192,8 +205,8 @@ here to change their success criterion. Their fixation relabel, however, was
 dead until item 8, and neither they nor any other cleanup scoped breaks until
 item 9. Scoping is now split by responsibility: a cleanup decides what a task's
 own event types mean, and the shared boundary in `_build_events_df` decides that
-a break is not a trial. That boundary covers all twenty-one declared exp_ids,
-including the seventeen with no cleanup entry. It is still not a universal
+a break is not a trial. That boundary covers all twenty-two declared exp_ids,
+including the eighteen with no cleanup entry. It is still not a universal
 sanitizer — any *other* non-trial id in a task without a cleanup keeps whatever
 condition `add_cols` copied onto it — so downstream readers still need trial-ID
 guards, including for already-written event files.
@@ -217,6 +230,9 @@ in the exercised cases and were preserved.
 - This is source inspection plus bounded synthetic regression evidence, not a
   complete validation of every acquisition/export version. The extra sparse-row,
   alias, and failure cases establish code behavior, not participant prevalence.
+- GLM subset tests transcribe the task YAML at network_glm commit
+  `122fa29cd11e724a6cfc8160841bcfc537bb2c82`; they check emitted-event behavior
+  against that contract, not future drift in the separate repository.
 - Identity depends on canonical input. Discovery filters task names, not complete
   acquisitions; duplicate/mismatched CSV identities, differently padded run
   tokens, and inconsistent multiecho metadata are not comprehensively validated.

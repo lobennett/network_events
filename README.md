@@ -29,6 +29,36 @@ reconciliation manifest or review gate any more.
 The two `migrate-*` commands move out-of-scanner practice data and prescan surveys into
 `sourcedata/`. They are optional and touch nothing `create` reads.
 
+## Event columns and labels
+
+The selected columns depend on the task. Missing values are written as `n/a`.
+
+| Columns | Meaning |
+| --- | --- |
+| `onset`, `duration`, `response_time` | Seconds; onsets follow the timing transformations below. |
+| `trial_id` | Event identity, such as `test_trial`, `test_cue`, `test_fixation`, or `break`. |
+| `trial_type` | Task-specific condition label, constructed from the selected raw condition fields and task cleanup. |
+| `key_press`, `correct_response`, `acc` | Response codes and accuracy scored before cue-response placeholders are applied. |
+| Task condition columns | Selected source factors, which may retain inherited values on nontrial rows. |
+
+Canonical `break` and `break_with_performance_feedback` rows have `trial_type=n/a`
+across tasks. Other nontrial labels remain task-specific: stop fixations use
+`fixation`, go/no-go nontrials use `n/a`, and tasks without cleanup may retain a
+condition label. Named cues and fixations keep their event identity and timing.
+Consumers should select the intended `trial_id` alongside the task's condition fields.
+
+Declared bare/`__fmri` aliases share their task's vocabulary. Flanker/cued switching
+uses `stay_stay`, `switch_stay`, or `switch_switch` plus the separate
+`flanker_condition`; shape/spatial switching uses switch-by-shape composites such
+as `tstay_cswitch_SSS`. Shape/cued switching keeps its switch label separate from
+`shape_matching_condition`. These are different task contracts, not one universal vocabulary.
+
+The owners are the column/condition lookups and cleanup in
+[`utils.py`](src/network_events/utils.py), with event-ID renaming, cue propagation
+and break scoping in [`create.py`](src/network_events/create.py). The
+[dated audit](docs/CODE-REVIEW.md) records reproductions, downstream selector
+evidence and remaining limits.
+
 ## What `create` does to the timing
 
 Three transformations, in order. All three are data-integrity fixes applied unconditionally —

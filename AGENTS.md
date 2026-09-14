@@ -2,7 +2,7 @@
 
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for locked setup, tests, and immutable
   dependency publication. Use `uv run --frozen pytest -q` to test this checkout.
-- [README.md](README.md) owns the canonical-input, timing, and QC contracts;
+- [README.md](README.md) owns the canonical-input, event-column, timing, and QC contracts;
   run/session pairing is settled upstream, and exclusion policy belongs to `network_qa`.
 - [docs/CODE-REVIEW.md](docs/CODE-REVIEW.md) records the event-semantics audit and
   its limits. [tests/test_event_semantics.py](tests/test_event_semantics.py) provides
