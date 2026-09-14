@@ -75,8 +75,8 @@ _CUE_RESPONSE_PLACEHOLDER_EXP_IDS = frozenset({
     "shape_matching_with_cued_task_switching",
 })
 
-# Non-trial rows that mark a rest/feedback screen rather than a modeled event.
-# ``add_cols`` copies whatever condition column the raw export left on them.
+# Rest/feedback rows must not inherit a stimulus-trial condition; dedicated
+# nontrial regressors can still select them by trial_id.
 _BREAK_TRIAL_IDS = ("break", "break_with_performance_feedback")
 
 
@@ -149,7 +149,7 @@ def acquired_duration(func_dir: Path, sub: str, ses: str, task: str,
 
 
 def _scan_overrun(df: pd.DataFrame, scan_s: float | None):
-    """``(n_kept, n_total, n_test_dropped)`` for clipping onsets to the scan."""
+    """``(n_kept, n_total, n_test_dropped, n_test_total)`` for scan clipping."""
     n_total = len(df)
     n_test_total = int((df["trial_id"] == "test_trial").sum())
     if scan_s is None:
@@ -229,13 +229,10 @@ def _build_events_df(filename: Path, short_name: str,
     df = response_time_and_junk(df, short_name)
     df = _set_default_event_cols(df, offset_s)
 
-    # cuedTSWFlanker: the cued-task-switch factor (composite trial_type +
-    # cue_condition/task_condition) lands only on the test_cue row, while the
-    # modeled test_trial row carries just flanker_condition. Propagate the
-    # switch factor from each test_cue onto the immediately following
-    # test_trial, only where the test_trial value is missing — so test_trial
-    # rows carry the switch trial_type like every other dual task, and the
-    # flanker factor stays in its own column for the GLM to cross.
+    # cuedTSWFlanker: switch factors are recorded on test_cue rows; test_trial
+    # rows may carry only flanker_condition. Fill missing switch fields from
+    # the most recent preceding cue so the GLM can cross them with the separate
+    # flanker factor without overwriting values already present on the trial.
     if "flanker_with_cued_task_switching" in exp_id:
         is_cue = df["trial_id"] == "test_cue"
         is_trial = df["trial_id"] == "test_trial"
@@ -461,13 +458,10 @@ def run_create_events(
         subjects: Optional list of subjects to process (default: all)
         sessions: Optional list of sessions to process (default: all)
 
-    For each successfully converted ``_events.tsv``, writes a truncation-QC
-    sidecar carrying the non-monotonic-truncation trial-retention metric at
-    ``sourcedata/events_qc/<sub>/<ses>/<sub>_<ses>_task-<task>_run-<run>_desc-truncation.json``
-    (see :func:`events_truncation_stats` / :func:`truncation_sidecar_path` /
-    :func:`_write_truncation_sidecar`). It is written under ``sourcedata/`` --
-    not as an ``_events.json`` in ``func/`` -- so bids-validator does not reject
-    it. No exclusion decision is made here -- that is ``network_qa``'s job.
+    QC metrics come from :func:`events_truncation_stats` and are written via
+    :func:`_write_truncation_sidecar`. See README.md's "The QC seam" for the
+    output and failure contract, and :func:`truncation_sidecar_path` for the
+    BIDS naming constraint.
     """
     for sub_dir in sorted(behavioral_dir.glob("sub-*")):
         if subjects and sub_dir.name not in subjects:

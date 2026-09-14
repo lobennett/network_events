@@ -50,8 +50,10 @@ Consumers should select the intended `trial_id` alongside the task's condition f
 Declared bare/`__fmri` aliases share their task's vocabulary. Flanker/cued switching
 uses `stay_stay`, `switch_stay`, or `switch_switch` plus the separate
 `flanker_condition`; shape/spatial switching uses switch-by-shape composites such
-as `tstay_cswitch_SSS`. Shape/cued switching keeps its switch label separate from
-`shape_matching_condition`. These are different task contracts, not one universal vocabulary.
+as `tstay_cswitch_SSS`, removing only a leading `td_same_`, `td_diff_`, or `td_na_`
+prefix and preserving already-normalized or other non-prefixed values.
+Shape/cued switching keeps its switch label separate from `shape_matching_condition`.
+These are different task contracts, not one universal vocabulary.
 
 The owners are the column/condition lookups and cleanup in
 [`utils.py`](src/network_events/utils.py), with event-ID renaming, cue propagation
@@ -105,9 +107,9 @@ The sidecar lives under `sourcedata/` with a non-reserved `_desc-truncation` nam
 an `_events.json` in `func/`: BIDS reserves the latter for events-column descriptions and
 bids-validator rejects it.
 
-A run whose conversion fails writes an empty `_events.tsv` and no sidecar — any sidecar an
-earlier successful run left is removed. A missing sidecar therefore means the conversion failed,
-never that nothing was dropped.
+When conversion fails, `create` warns, writes a header-only `_events.tsv`, and removes any
+truncation sidecar from an earlier successful conversion of that run. Successful conversions
+write a sidecar even when no trials were dropped; a missing sidecar is not evidence of zero loss.
 
 ## Layout
 

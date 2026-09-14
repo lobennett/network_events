@@ -12,7 +12,7 @@ separate participant-level scientific report or downstream GLM audit.
 | --- | --- |
 | `cli.py`, `run.py` | Four commands; `create` consumes canonical `sub-*/ses-*/beh` CSVs, with a legacy `in_scanner_behavior` resolver. `run` requires ingested subjects and optionally copies practice/survey data. CLI routing and migrations have existing tests. |
 | `create.py` discovery and identity | Task discovery from NIfTIs; task/run from CSV filenames; subject/session from directories. New CLI tests use two subjects, two sessions, and sibling runs with different scan lengths and discarded-volume counts. Canonical pairing remains upstream. |
-| `utils.py` and event construction | Read every task column/condition lookup and cleanup, accuracy calculation, negative-RT clock reconstruction, trigger subtraction, units, missing-value handling, cue propagation, and renaming, including the order the pipeline applies them in. New raw-to-BIDS tests focus on go/no-go, single stop, and the shape/cued-switch and flanker/cued-switch aliases; existing dual-task controls remain. |
+| `utils.py` and event construction | Read every task column/condition lookup and cleanup, accuracy calculation, negative-RT clock reconstruction, trigger subtraction, units, missing-value handling, cue propagation, and renaming, including the order the pipeline applies them in. New raw-to-BIDS tests cover go/no-go, all three stop tasks, and the shape/cued-switch, flanker/cued-switch, and shape/spatial-switch aliases; existing dual-task controls remain. |
 | Timing and QC output | Per-run dummy shift, first backward-onset cut, acquired NIfTI length, onset clipping, TSV writing and truncation sidecar. Existing tests cover individual cuts; a new combined-cut test checks independent denominators and duration preservation. |
 | `migrate.py`, `config.py`, `qc_globals.py`, package metadata | Optional practice/survey copies, acquisition constants, and reference-only QC thresholds. No in-scanner migration restored. Package metadata no longer claims to trim NIfTIs. |
 
@@ -22,11 +22,13 @@ it was neither merged nor closed.
 
 ## Confirmed defects and corrections
 
-All reproductions are in [test_event_semantics.py](../tests/test_event_semantics.py).
-They write synthetic jsPsych-style CSVs into a canonical sourcedata tree and call
-the real `create` CLI with small synthetic BOLD NIfTIs and JSON metadata. The
-fixtures follow the package's block-end clock, millisecond units, required task
-columns, and response-sentinel contracts; they are not participant exports.
+Reproductions are in [test_event_semantics.py](../tests/test_event_semantics.py)
+and [test_dual_task_fixups.py](../tests/test_dual_task_fixups.py). CLI cases write
+synthetic jsPsych-style CSVs into a canonical sourcedata tree with small synthetic
+BOLD NIfTIs and JSON metadata. Other cases call `create_events_df` directly,
+including TSV roundtrips for GLM subset checks. The fixtures follow the package's
+block-end clock, millisecond units, required task columns, and response-sentinel
+contracts; they are not participant exports.
 
 1. **Go/no-go feedback became a trial condition.** A `feedback_block` carrying
    `go` or `nogo` was classified using response accuracy before being renamed to
@@ -96,22 +98,18 @@ columns, and response-sentinel contracts; they are not participant exports.
    accuracy, and timing are unchanged; the rename is value-only and the rows it
    touches are the same ones either way.
 
-9. **Breaks kept the preceding trial's condition on every task.** `add_cols`
+9. **Breaks could inherit trial conditions across tasks.** `add_cols`
    copies a condition column onto rest/feedback rows, and only the go/no-go
-   cleanup scoped it — four of twenty-two declared exp_ids have a cleanup at
-   all. `break` and `break_with_performance_feedback` rows now get
+   cleanup scoped it. `break` and `break_with_performance_feedback` rows now get
    `trial_type=n/a` at a single shared boundary in `_build_events_df`, after
    feedback identification. This is deliberately limited to breaks: every other
    event keeps its canonical `trial_id`, timing and source columns, and
-   `test_trial` classification is untouched. Event *identity* is the `trial_id`;
-   `trial_type` is the condition label, and the two are scoped separately. A
-   non-trial row's `trial_type` is therefore not uniform across the battery —
-   stop fixations read `fixation`, go/no-go nontrials read `n/a`, and a task
-   with no cleanup keeps whatever condition `add_cols` copied on. No inspected
-   consumer requires one battery-wide non-trial condition vocabulary, so none
-   was invented. The source condition column is still emitted as provenance. The
-   stop regression covers this with and without inherited raw `go`/`stop`
-   labels.
+   `test_trial` classification is untouched. The task-specific distinction
+   between event identity and condition labels is documented in
+   [README's event-column contract](../README.md#event-columns-and-labels).
+   No inspected consumer requires one battery-wide nontrial condition vocabulary.
+   The stop regression covers break scoping with and without inherited raw
+   `go`/`stop` labels and verifies that the source column survives.
 
 10. **A widened substring silently changed a second task.** Relaxing
     `"cued_task_switching_" in exp_id` to `"cued_task_switching"` for the cue
@@ -173,9 +171,10 @@ columns, and response-sentinel contracts; they are not participant exports.
     parity was restored, the shape/spatial path still dropped the first two
     tokens unconditionally. A minimal trigger-plus-trial CSV with
     `predictable_condition=tstay_cswitch` and shape `SSS` emitted only `SSS`,
-    matching none of the intended switch-by-shape cells. It now removes only
-    an anchored `td_same_`, `td_diff_`, or `td_na_` prefix. Twelve real-CLI cases
-    cover both aliases: the three acquisition prefixes mask the old defect,
+    matching none of the intended switch-by-shape cells. Prefix handling now
+    follows the [event-column contract](../README.md#event-columns-and-labels).
+    Twelve real-CLI cases cover both aliases: the three acquisition prefixes
+    mask the old defect,
     while normalized values, unknown prefixes and a non-leading `td_same_`
     expose it. Six cases failed before the fix; all now preserve the expected
     label, timing and behavioral columns. Unknown text remains unmodeled rather

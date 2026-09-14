@@ -13,7 +13,11 @@ def cal_time_elapsed(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_neg_rt_correction(df: pd.DataFrame) -> pd.DataFrame:
-    """Fix RT estimation errors from cumulative timing drift."""
+    """Reconstruct block-end timestamps after timing drift, leaving RTs unchanged.
+
+    An RT below -1 requires a preceding retained timed row as the clock anchor;
+    raise ValueError if none exists. Preserve CSV indices for feedback matching.
+    """
     df.dropna(subset=["block_duration"], inplace=True)
     negative_rt = df.loc[df["rt"] < -1]
     if not negative_rt.empty:
