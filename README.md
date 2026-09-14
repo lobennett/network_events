@@ -75,6 +75,10 @@ The sidecar lives under `sourcedata/` with a non-reserved `_desc-truncation` nam
 an `_events.json` in `func/`: BIDS reserves the latter for events-column descriptions and
 bids-validator rejects it.
 
+A run whose conversion fails writes an empty `_events.tsv` and no sidecar — any sidecar an
+earlier successful run left is removed. A missing sidecar therefore means the conversion failed,
+never that nothing was dropped.
+
 ## Layout
 
 ```

@@ -461,8 +461,8 @@ def run_create_events(
         subjects: Optional list of subjects to process (default: all)
         sessions: Optional list of sessions to process (default: all)
 
-    For each ``_events.tsv``, writes a truncation-QC sidecar carrying the
-    non-monotonic-truncation trial-retention metric at
+    For each successfully converted ``_events.tsv``, writes a truncation-QC
+    sidecar carrying the non-monotonic-truncation trial-retention metric at
     ``sourcedata/events_qc/<sub>/<ses>/<sub>_<ses>_task-<task>_run-<run>_desc-truncation.json``
     (see :func:`events_truncation_stats` / :func:`truncation_sidecar_path` /
     :func:`_write_truncation_sidecar`). It is written under ``sourcedata/`` --
