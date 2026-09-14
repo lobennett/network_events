@@ -91,7 +91,13 @@ src/network_events/
 ## Tests
 
 ```bash
-uv run pytest -q
+uv sync --frozen --group dev
+uv run --frozen pytest -q -ra
 ```
+
+GitHub Actions runs the full suite on Linux with Python 3.11 and 3.12 for pushes and
+pull requests. Tests generate synthetic behavioural CSVs, NIfTIs, and directory trees;
+no participant data or cluster access is needed. This checks software behaviour,
+not acquisition-data validation or the full `network_fmri` pipeline on Sherlock.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
