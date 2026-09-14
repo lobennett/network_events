@@ -55,10 +55,29 @@ _RENAME_CELLS_LOOKUP = {
     "flanker_with_cued_task_switching": {"practice-stop-feedback": "break"},
     "n_back_with_shape_matching__fmri": {"feedback_block": "break", "fixation": "test_fixation"},
     "shape_matching_with_spatial_task_switching__fmri": {"feedback_block": "break", "fixation": "test_fixation"},
+    "shape_matching_with_spatial_task_switching": {"feedback_block": "break", "fixation": "test_fixation"},
     "shape_matching_with_cued_task_switching__fmri": {"fixation": "test_fixation", "cue": "test_cue", "feedback_block": "break"},
     "shape_matching_with_cued_task_switching": {"fixation": "test_fixation", "cue": "test_cue", "feedback_block": "break"},
     "n_back_with_spatial_task_switching__fmri": {"feedback_block": "break", "fixation": "test_fixation"},
 }
+
+
+# Cued-task-switching exp_ids (both the ``__fmri`` spelling and the bare alias)
+# whose ``test_cue`` row shows the upcoming task cue and admits no response, so
+# any raw ``correct_response`` on it is meaningless.
+_CUE_RESPONSE_PLACEHOLDER_EXP_IDS = frozenset({
+    "cued_task_switching_single_task_network__fmri",
+    "cued_task_switching_with_directed_forgetting__fmri",
+    "spatial_task_switching_with_cued_task_switching__fmri",
+    "flanker_with_cued_task_switching__fmri",
+    "flanker_with_cued_task_switching",
+    "shape_matching_with_cued_task_switching__fmri",
+    "shape_matching_with_cued_task_switching",
+})
+
+# Rest/feedback rows must not inherit a stimulus-trial condition; dedicated
+# nontrial regressors can still select them by trial_id.
+_BREAK_TRIAL_IDS = ("break", "break_with_performance_feedback")
 
 
 def _rename_cells(df: pd.DataFrame, exp_id: str) -> pd.DataFrame:
@@ -68,7 +87,7 @@ def _rename_cells(df: pd.DataFrame, exp_id: str) -> pd.DataFrame:
         return df
     for key, value in change.items():
         df["trial_id"] = df["trial_id"].replace(key, value)
-    if "cued_task_switching_" in exp_id:
+    if exp_id in _CUE_RESPONSE_PLACEHOLDER_EXP_IDS:
         df["correct_response"] = df["correct_response"].astype(object)
         df.loc[df["trial_id"] == "test_cue", "correct_response"] = "n/a"
     return df
@@ -130,7 +149,7 @@ def acquired_duration(func_dir: Path, sub: str, ses: str, task: str,
 
 
 def _scan_overrun(df: pd.DataFrame, scan_s: float | None):
-    """``(n_kept, n_total, n_test_dropped)`` for clipping onsets to the scan."""
+    """``(n_kept, n_total, n_test_dropped, n_test_total)`` for scan clipping."""
     n_total = len(df)
     n_test_total = int((df["trial_id"] == "test_trial").sum())
     if scan_s is None:
@@ -141,7 +160,7 @@ def _scan_overrun(df: pd.DataFrame, scan_s: float | None):
 
 
 def _set_default_event_cols(df: pd.DataFrame, offset_s: float = DUMMY_OFFSET_S) -> pd.DataFrame:
-    df = df[df.time_elapsed > 0]
+    df = df[df.time_elapsed >= 0]
     df = df.rename(columns={"time_elapsed": "onset", "choice_acc": "acc", "stim_duration": "duration", "rt": "response_time"})
     df["onset"] = df["onset"] / 1000
     df["duration"] = df["duration"] / 1000
@@ -158,7 +177,9 @@ def _set_default_event_cols(df: pd.DataFrame, offset_s: float = DUMMY_OFFSET_S) 
     return df
 
 
-def _flagged_feedback(text_content: str) -> bool:
+def _flagged_feedback(text_content: object) -> bool:
+    if not isinstance(text_content, str):
+        return False
     keywords = ["accuracy", "slowly", "respond", "response"]
     return any(keyword in text_content.lower() for keyword in keywords)
 
@@ -185,7 +206,7 @@ def _get_rows_with_feedback(df: pd.DataFrame, original_df: pd.DataFrame):
         feedback_block_rows = original_df[stimulus_col.str.contains("completed", na=False)]
     indices_to_change = []
     for index, row in feedback_block_rows.iterrows():
-        stimulus = row["stimulus"]
+        stimulus = row.get("stimulus")
         if _flagged_feedback(stimulus):
             indices_to_change.append(index)
     return feedback_block_rows, indices_to_change
@@ -202,18 +223,16 @@ def _build_events_df(filename: Path, short_name: str,
     df = cal_time_elapsed(df)
     df = add_choice_acc(df)
     df = add_cols(df, exp_id)
+    # Standardize trial_id first: the task cleanups key off canonical ids
+    # (test_fixation, break), which only exist after this rename.
+    df = _rename_cells(df, exp_id)
     df = response_time_and_junk(df, short_name)
     df = _set_default_event_cols(df, offset_s)
-    df = _rename_cells(df, exp_id)
 
-    # cuedTSWFlanker: the cued-task-switch factor (composite trial_type +
-    # cue_condition/task_condition) lands only on the test_cue row, while the
-    # modeled test_trial row carries just flanker_condition. (The exp_id lacks
-    # the "__fmri" suffix the add_cols special-case checks, so its shift never
-    # fires.) Propagate the switch factor from each test_cue onto the
-    # immediately following test_trial, only where the test_trial value is
-    # missing — so test_trial rows carry the switch trial_type like every other
-    # dual task.
+    # cuedTSWFlanker: switch factors are recorded on test_cue rows; test_trial
+    # rows may carry only flanker_condition. Fill missing switch fields from
+    # the most recent preceding cue so the GLM can cross them with the separate
+    # flanker factor without overwriting values already present on the trial.
     if "flanker_with_cued_task_switching" in exp_id:
         is_cue = df["trial_id"] == "test_cue"
         is_trial = df["trial_id"] == "test_trial"
@@ -249,6 +268,10 @@ def _build_events_df(filename: Path, short_name: str,
     for index in indices_to_change:
         if index in df.index:
             df.loc[index, "trial_id"] = "break_with_performance_feedback"
+
+    # A break shows no stimulus to classify, so any condition it inherited is
+    # provenance only; the source column keeps it, trial_type must not.
+    df.loc[df["trial_id"].isin(_BREAK_TRIAL_IDS), "trial_type"] = "n/a"
 
     return df
 
@@ -435,13 +458,10 @@ def run_create_events(
         subjects: Optional list of subjects to process (default: all)
         sessions: Optional list of sessions to process (default: all)
 
-    For each ``_events.tsv``, writes a truncation-QC sidecar carrying the
-    non-monotonic-truncation trial-retention metric at
-    ``sourcedata/events_qc/<sub>/<ses>/<sub>_<ses>_task-<task>_run-<run>_desc-truncation.json``
-    (see :func:`events_truncation_stats` / :func:`truncation_sidecar_path` /
-    :func:`_write_truncation_sidecar`). It is written under ``sourcedata/`` --
-    not as an ``_events.json`` in ``func/`` -- so bids-validator does not reject
-    it. No exclusion decision is made here -- that is ``network_qa``'s job.
+    QC metrics come from :func:`events_truncation_stats` and are written via
+    :func:`_write_truncation_sidecar`. See README.md's "The QC seam" for the
+    output and failure contract, and :func:`truncation_sidecar_path` for the
+    BIDS naming constraint.
     """
     for sub_dir in sorted(behavioral_dir.glob("sub-*")):
         if subjects and sub_dir.name not in subjects:
@@ -484,9 +504,13 @@ def run_create_events(
                     df = create_empty_events_df()
 
                 df.to_csv(outpath, sep="\t", index=False, na_rep="n/a")
+                sidecar_path = truncation_sidecar_path(
+                    bids_dir, sub_dir.name, ses_dir.name, task_name, run_num
+                )
                 if tstats is not None:
-                    sidecar_path = truncation_sidecar_path(
-                        bids_dir, sub_dir.name, ses_dir.name, task_name, run_num
-                    )
                     _write_truncation_sidecar(sidecar_path, tstats)
+                else:
+                    # An empty fallback TSV cannot carry a previous run's
+                    # successful retention counts after conversion fails.
+                    sidecar_path.unlink(missing_ok=True)
                 tasks_with_events.add(task_name)

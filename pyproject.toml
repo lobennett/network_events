@@ -1,10 +1,10 @@
 [project]
 name = "network_events"
 version = "0.1.0"
-description = "Study-specific behavioral + BIDS event-generation pipeline for the r01network project (raw jsPsych CSV -> sourcedata + _events.tsv + QC + trim)."
+description = "Study-specific behavioral + BIDS event-generation pipeline for the r01network project (raw jsPsych CSV -> _events.tsv + trial-retention metrics)."
 readme = "README.md"
 requires-python = ">=3.11"
-# nibabel: trim.py truncates NIfTIs; it was imported but never declared.
+# nibabel reads acquired scan length from NIfTI headers for onset clipping.
 dependencies = ["numpy", "pandas", "nibabel"]
 
 [project.scripts]
