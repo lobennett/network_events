@@ -57,17 +57,37 @@ def test_rest_requires_no_behavior(tmp_path):
     assert audit_dataset(bids, behavior).errors == ()
 
 
-def test_audit_rejects_invalid_and_duplicate_behavior_files(tmp_path):
+def test_audit_rejects_unparseable_behavior_files(tmp_path):
     bids, behavior = dataset_with_bold(tmp_path, task="nBack")
-    write_behavior(behavior, "sub-s01_ses-01_task-nBack_run-1_beh.csv")
-    duplicate = behavior / "duplicate" / "sub-s01_ses-01_task-nBack_run-1_beh.csv"
-    duplicate.parent.mkdir()
-    duplicate.write_text("trial_id\nexample\n")
     bad = behavior / "sub-s01" / "ses-01" / "beh" / "notes.csv"
+    bad.parent.mkdir(parents=True)
     bad.write_text("notes\n")
     result = audit_dataset(bids, behavior)
-    assert any("duplicate behavior" in error for error in result.errors)
     assert any("unparseable behavior" in error for error in result.errors)
+
+
+def test_audit_rejects_behavior_outside_canonical_directory_or_with_mismatched_entities(tmp_path):
+    bids, behavior = dataset_with_bold(tmp_path, task="nBack")
+    misplaced = behavior / "other" / "sub-s01_ses-01_task-nBack_run-1_beh.csv"
+    misplaced.parent.mkdir()
+    misplaced.write_text("trial_id\nexample\n")
+    mismatch = behavior / "sub-s02" / "ses-01" / "beh" / "sub-s01_ses-01_task-nBack_run-1_beh.csv"
+    mismatch.parent.mkdir(parents=True)
+    mismatch.write_text("trial_id\nexample\n")
+    result = audit_dataset(bids, behavior)
+    assert any("noncanonical behavior path" in error for error in result.errors)
+    assert result.pairs == ()
+
+
+def test_duplicate_behavior_is_withheld_from_pairs(tmp_path):
+    bids, behavior = dataset_with_bold(tmp_path, task="nBack")
+    write_behavior(behavior, "sub-s01_ses-01_task-nBack_run-1_beh.csv")
+    duplicate = behavior / "sub-s01" / "ses-01" / "beh-alt" / "sub-s01_ses-01_task-nBack_run-1_beh.csv"
+    duplicate.parent.mkdir()
+    duplicate.write_text("trial_id\nexample\n")
+    result = audit_dataset(bids, behavior)
+    assert any("duplicate behavior" in error for error in result.errors)
+    assert result.pairs == ()
 
 
 def test_audit_rejects_orphan_behavior_and_behavior_with_exception(tmp_path):
@@ -106,3 +126,23 @@ def test_audit_rejects_exception_rows_with_non_bids_identity_labels(tmp_path):
     }])
     result = audit_dataset(bids, behavior)
     assert any("malformed exception row" in error for error in result.errors)
+
+
+def test_duplicate_exception_is_withheld_from_exceptions(tmp_path):
+    bids, behavior = dataset_with_bold(tmp_path, task="nBack")
+    row = {
+        "subject": "sub-s01", "session": "ses-01", "task": "nBack", "run": "1",
+        "reason": "lost", "detail": "unrecoverable", "reviewed_by": "reviewer", "reviewed_at": "2026-09-18",
+    }
+    write_exceptions(behavior, [row, row])
+    result = audit_dataset(bids, behavior)
+    assert any("duplicate exception" in error for error in result.errors)
+    assert result.exceptions == ()
+
+
+def test_audit_rejects_non_alphanumeric_or_empty_entity_labels(tmp_path):
+    bids, behavior = dataset_with_bold(tmp_path, task="nBack")
+    write_behavior(behavior, "sub-s01_ses-01_task-n Back_run-1_beh.csv")
+    write_behavior(behavior, "sub-s01_ses-01_task-nBack_run-_beh.csv")
+    result = audit_dataset(bids, behavior)
+    assert sum("unparseable behavior" in error for error in result.errors) == 2

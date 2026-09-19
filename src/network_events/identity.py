@@ -8,15 +8,15 @@ from pathlib import Path
 
 
 _BEHAVIOR_RE = re.compile(
-    r"^(?P<subject>sub-[^_]+)_(?P<session>ses-[^_]+)_task-(?P<task>[^_]+)_run-(?P<run>[^_]+)_beh\.csv$"
+    r"^(?P<subject>sub-[A-Za-z0-9]+)_(?P<session>ses-[A-Za-z0-9]+)_task-(?P<task>[A-Za-z0-9]+)_run-(?P<run>[A-Za-z0-9]+)_beh\.csv$"
 )
 _BOLD_RE = re.compile(
-    r"^(?P<subject>sub-[^_]+)_(?P<session>ses-[^_]+)_task-(?P<task>[^_]+)_run-(?P<run>[^_]+)(?:_[^_]+)*_bold\.nii(?:\.gz)?$"
+    r"^(?P<subject>sub-[A-Za-z0-9]+)_(?P<session>ses-[A-Za-z0-9]+)_task-(?P<task>[A-Za-z0-9]+)_run-(?P<run>[A-Za-z0-9]+)(?:_[A-Za-z0-9]+-[A-Za-z0-9]+)*_bold\.nii(?:\.gz)?$"
 )
 _EXCEPTION_COLUMNS = (
     "subject", "session", "task", "run", "reason", "detail", "reviewed_by", "reviewed_at"
 )
-_LABEL_RE = re.compile(r"^[^_]+$")
+_LABEL_RE = re.compile(r"^[A-Za-z0-9]+$")
 
 
 @dataclass(frozen=True, order=True)
@@ -53,6 +53,7 @@ def _read_exceptions(path: Path) -> tuple[dict[RunIdentity, BehaviorException], 
         return {}, []
     errors: list[str] = []
     exceptions: dict[RunIdentity, BehaviorException] = {}
+    duplicates: set[RunIdentity] = set()
     try:
         with path.open(newline="") as stream:
             reader = csv.DictReader(stream, delimiter="\t")
@@ -64,9 +65,11 @@ def _read_exceptions(path: Path) -> tuple[dict[RunIdentity, BehaviorException], 
                 values = {column: (row.get(column) or "").strip() for column in _EXCEPTION_COLUMNS}
                 identity_values = (values["subject"], values["session"], values["task"], values["run"])
                 valid_identity = (
-                    values["subject"].startswith("sub-")
+                    _LABEL_RE.fullmatch(values["subject"].removeprefix("sub-")) is not None
+                    and values["subject"].startswith("sub-")
+                    and _LABEL_RE.fullmatch(values["session"].removeprefix("ses-")) is not None
                     and values["session"].startswith("ses-")
-                    and all(_LABEL_RE.fullmatch(value) for value in identity_values)
+                    and all(_LABEL_RE.fullmatch(value) for value in identity_values[2:])
                 )
                 if not all(values.values()) or not valid_identity:
                     errors.append(f"{path}:{row_number}: malformed exception row")
@@ -76,12 +79,15 @@ def _read_exceptions(path: Path) -> tuple[dict[RunIdentity, BehaviorException], 
                 )
                 if identity in exceptions:
                     errors.append(f"{identity.display()}: duplicate exception")
+                    duplicates.add(identity)
                     continue
                 exceptions[identity] = BehaviorException(
                     identity=identity, reason=values["reason"], detail=values["detail"]
                 )
     except (OSError, csv.Error) as exc:
         errors.append(f"{path}: unreadable exceptions file: {exc}")
+    for identity in duplicates:
+        exceptions.pop(identity, None)
     return exceptions, errors
 
 
@@ -90,14 +96,22 @@ def audit_dataset(bids_dir: Path, behavioral_dir: Path) -> AuditResult:
     bids_dir, behavioral_dir = Path(bids_dir), Path(behavioral_dir)
     errors: list[str] = []
     behavior_files: dict[RunIdentity, Path] = {}
+    seen_behavior: set[RunIdentity] = set()
+    unusable_behavior: set[RunIdentity] = set()
     for csv_path in sorted(behavioral_dir.rglob("*.csv")):
         match = _BEHAVIOR_RE.fullmatch(csv_path.name)
         if match is None:
             errors.append(f"{csv_path}: unparseable behavior file")
             continue
         identity = _identity(match)
-        if identity in behavior_files:
+        if identity in seen_behavior:
             errors.append(f"{identity.display()}: duplicate behavior")
+            unusable_behavior.add(identity)
+        seen_behavior.add(identity)
+        expected_parts = (identity.subject, identity.session, "beh", csv_path.name)
+        if csv_path.relative_to(behavioral_dir).parts != expected_parts:
+            errors.append(f"{csv_path}: noncanonical behavior path")
+            unusable_behavior.add(identity)
             continue
         behavior_files[identity] = csv_path
 
@@ -121,7 +135,7 @@ def audit_dataset(bids_dir: Path, behavioral_dir: Path) -> AuditResult:
         if identity not in non_rest_bolds:
             errors.append(f"{identity.display()}: orphan exception")
     for identity in sorted(non_rest_bolds):
-        has_behavior = identity in behavior_files
+        has_behavior = identity in behavior_files and identity not in unusable_behavior
         has_exception = identity in exceptions
         if has_behavior and has_exception:
             errors.append(f"{identity.display()}: both behavior and exception")
@@ -131,7 +145,9 @@ def audit_dataset(bids_dir: Path, behavioral_dir: Path) -> AuditResult:
     pairs = tuple(
         (identity, behavior_files[identity])
         for identity in sorted(non_rest_bolds)
-        if identity in behavior_files and identity not in exceptions
+        if identity in behavior_files
+        and identity not in unusable_behavior
+        and identity not in exceptions
     )
     reviewed = tuple(exceptions[identity] for identity in sorted(exceptions))
     return AuditResult(pairs=pairs, exceptions=reviewed, errors=tuple(sorted(errors)))
