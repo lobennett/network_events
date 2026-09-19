@@ -1,3 +1,4 @@
+import network_events
 from network_events.config import N_DUMMY, TR_SECONDS
 
 def test_acquisition_constants():
@@ -5,3 +6,7 @@ def test_acquisition_constants():
     assert TR_SECONDS == 1.49
     # dummy offset used for onset adjustment in create.py
     assert abs(N_DUMMY * TR_SECONDS - 10.43) < 1e-9
+
+
+def test_package_version_is_020():
+    assert network_events.__version__ == "0.2.0"
