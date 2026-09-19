@@ -1,72 +1,100 @@
-"""network-events CLI: `create` writes the events, the rest move data into sourcedata/.
-
-All subcommands are pure/idempotent so an operator can wrap them in `datalad run`.
-"""
+"""Audit canonical behavioral identities and create their BIDS events."""
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
-from network_events import migrate as _migrate_mod
-from network_events.run import subjects_in
-from network_events.create import run_create_events
-from network_events.run import run as _orchestrate
+from network_events.create import create_events
+from network_events.identity import AuditResult, audit_dataset
 
 
+def _audit_payload(result: AuditResult) -> dict[str, object]:
+    return {
+        "pairs": [
+            {
+                "subject": identity.subject,
+                "session": identity.session,
+                "task": identity.task,
+                "run": identity.run,
+                "behavior_file": str(behavior_file),
+            }
+            for identity, behavior_file in result.pairs
+        ],
+        "exceptions": [
+            {
+                "subject": exception.identity.subject,
+                "session": exception.identity.session,
+                "task": exception.identity.task,
+                "run": exception.identity.run,
+                "reason": exception.reason,
+                "detail": exception.detail,
+            }
+            for exception in result.exceptions
+        ],
+        "errors": list(result.errors),
+    }
 
 
-def _migrate_archive(a):
-    subjects = subjects_in(Path(a.output_dir))
-    copied = _migrate_mod.migrate_out_scanner(raw_dir=a.raw_dir,
-                                              output_dir=a.output_dir, subjects=subjects)
-    payload = {"subjects": sorted(subjects), "out_scanner_files": copied}
-    _migrate_mod._write_migration_report(payload, a.output_dir, "archive_migration_report.json")
-
-def _migrate_survey(a):
-    subjects = subjects_in(Path(a.output_dir))
-    copied = _migrate_mod.migrate_survey(survey_root=a.survey_root,
-                                        output_dir=a.output_dir, subjects=subjects)
-    payload = {"subjects": sorted(subjects), "survey_files": copied}
-    _migrate_mod._write_migration_report(payload, a.output_dir, "survey_migration_report.json")
-
-def _in_scanner(sourcedata):
-    """Resolve the dir holding sub-*/ses-*/beh CSVs. In-scanner behavioral
-    migrates to <sourcedata>/in_scanner_behavior/, so prefer that when present;
-    fall back to the given path (already the in_scanner dir)."""
-    sd = Path(sourcedata)
-    cand = sd / "in_scanner_behavior"
-    return cand if cand.is_dir() else sd
-
-def _create(a):
-    run_create_events(behavioral_dir=_in_scanner(a.sourcedata), bids_dir=Path(a.bids_dir))
-
-def _run(a):
-    _orchestrate(behavioral_dir=a.behavioral_dir, bids_dir=a.bids_dir,
-                 survey_root=a.survey_root)
+def _print_payload(payload: dict[str, object]) -> None:
+    print(json.dumps(payload, sort_keys=True))
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(prog="network-events", description=__doc__.splitlines()[0])
-    sub = ap.add_subparsers(dest="cmd", required=True)
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as stream:
+        json.dump(payload, stream, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+    temporary_path.replace(path)
 
-    p = sub.add_parser("migrate-archive"); p.add_argument("--raw-dir", required=True)
-    p.add_argument("--output-dir", required=True)
-    p.set_defaults(func=_migrate_archive)
 
-    p = sub.add_parser("migrate-survey"); p.add_argument("--survey-root", required=True)
-    p.add_argument("--output-dir", required=True)
-    p.set_defaults(func=_migrate_survey)
+def _audit(args: argparse.Namespace) -> int:
+    result = audit_dataset(args.bids_dir, args.behavioral_dir)
+    payload = _audit_payload(result)
+    _print_payload(payload)
+    if args.json is not None:
+        _write_json(args.json, payload)
+    return 0 if args.behavioral_dir.is_dir() and not result.errors else 2
 
-    p = sub.add_parser("create"); p.add_argument("--sourcedata", required=True)
-    p.add_argument("--bids-dir", required=True); p.set_defaults(func=_create)
 
-    p = sub.add_parser("run"); p.add_argument("--behavioral-dir", required=True)
-    p.add_argument("--bids-dir", required=True)
-    p.add_argument("--survey-root", default=None); p.set_defaults(func=_run)
+def _create(args: argparse.Namespace) -> int:
+    result = audit_dataset(args.bids_dir, args.behavioral_dir)
+    payload = _audit_payload(result)
+    if not args.behavioral_dir.is_dir() or result.errors:
+        _print_payload({"audit": payload, "created": 0, "failed": 0})
+        return 2
 
-    args = ap.parse_args(argv)
-    args.func(args)
+    conversion_results = create_events(args.bids_dir, result.pairs)
+    created = sum(item.status == "created" for item in conversion_results)
+    failed = sum(item.status == "failed" for item in conversion_results)
+    _print_payload({"audit": payload, "created": created, "failed": failed})
+    return 0 if created + failed == len(result.pairs) else 2
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="network-events", description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    audit_parser = subparsers.add_parser("audit")
+    audit_parser.add_argument("--bids-dir", type=Path, required=True)
+    audit_parser.add_argument("--behavioral-dir", type=Path, required=True)
+    audit_parser.add_argument("--json", type=Path)
+    audit_parser.set_defaults(handler=_audit)
+
+    create_parser = subparsers.add_parser("create")
+    create_parser.add_argument("--bids-dir", type=Path, required=True)
+    create_parser.add_argument("--behavioral-dir", type=Path, required=True)
+    create_parser.set_defaults(handler=_create)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return args.handler(args)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
