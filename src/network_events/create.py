@@ -16,13 +16,16 @@ that is ``network_qa``'s call. :func:`run_create_events` writes the cost of each
 import json
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable, Literal
 
 import nibabel as nib
 import numpy as np
 import pandas as pd
 
 from network_events.config import N_DUMMY, TR_SECONDS
+from network_events.identity import RunIdentity
 from network_events.utils import (
     get_neg_rt_correction,
     cal_time_elapsed,
@@ -33,6 +36,18 @@ from network_events.utils import (
 )
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EventResult:
+    """The output (or recorded failure) for one audited behavioral run."""
+
+    identity: RunIdentity
+    status: Literal["created", "failed"]
+    behavior_file: Path
+    events_file: Path | None
+    qc_file: Path | None
+    error: str | None
 
 # --- Rename cells (trial_id label standardization) ---
 
@@ -417,8 +432,112 @@ def _write_truncation_sidecar(sidecar_path: Path, tstats: dict) -> Path:
         "NScanTestTrialsDropped": tstats["scan_test_dropped"],
         "FractionScanTestTrialsDropped": tstats["fraction_scan_test_dropped"],
     }
-    sidecar_path.write_text(json.dumps(sidecar, indent=2))
+    tmp_path = sidecar_path.with_suffix(sidecar_path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as stream:
+        json.dump(sidecar, stream, indent=2)
+        stream.flush()
+    tmp_path.replace(sidecar_path)
     return sidecar_path
+
+
+def _events_path(bids_dir: Path, identity: RunIdentity) -> Path:
+    return (
+        bids_dir / identity.subject / identity.session / "func"
+        / f"{identity.subject}_{identity.session}_task-{identity.task}_run-{identity.run}_events.tsv"
+    )
+
+
+def _write_events(events_path: Path, df: pd.DataFrame) -> Path:
+    """Atomically replace one events TSV after its complete contents are flushed."""
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = events_path.with_suffix(events_path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8", newline="") as stream:
+        df.to_csv(stream, sep="\t", index=False, na_rep="n/a")
+        stream.flush()
+    tmp_path.replace(events_path)
+    return events_path
+
+
+def _write_conversion_errors(bids_dir: Path, errors: list[dict[str, str]]) -> Path:
+    """Publish one run-level conversion error table after all pairs were attempted."""
+    error_path = bids_dir / "sourcedata" / "events_qc" / "conversion_errors.tsv"
+    error_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = error_path.with_suffix(error_path.suffix + ".tmp")
+    columns = (
+        "subject", "session", "task", "run", "source_path", "exception_class", "message"
+    )
+    with tmp_path.open("w", encoding="utf-8", newline="") as stream:
+        import csv
+
+        writer = csv.DictWriter(stream, fieldnames=columns, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(errors)
+        stream.flush()
+    tmp_path.replace(error_path)
+    return error_path
+
+
+def create_events(
+    bids_dir: Path,
+    pairs: Iterable[tuple[RunIdentity, Path]],
+) -> tuple[EventResult, ...]:
+    """Convert exact audited pairs and account for every pair in the returned results."""
+    bids_dir = Path(bids_dir)
+    results: list[EventResult] = []
+    errors: list[dict[str, str]] = []
+
+    for identity, behavior_file in pairs:
+        behavior_file = Path(behavior_file)
+        events_path = _events_path(bids_dir, identity)
+        qc_path = truncation_sidecar_path(
+            bids_dir, identity.subject, identity.session, identity.task, identity.run
+        )
+        func_dir = events_path.parent
+        try:
+            offset_s = dummy_offset_from_sidecar(
+                func_dir, identity.subject, identity.session, identity.task, identity.run
+            )
+            scan_s = acquired_duration(
+                func_dir, identity.subject, identity.session, identity.task, identity.run
+            )
+            df = create_events_df(behavior_file, identity.task, offset_s, scan_s)
+            tstats = events_truncation_stats(behavior_file, identity.task, offset_s, scan_s)
+            _write_events(events_path, df)
+            _write_truncation_sidecar(qc_path, tstats)
+        except Exception as exc:
+            events_path.unlink(missing_ok=True)
+            qc_path.unlink(missing_ok=True)
+            error = f"{type(exc).__name__}: {exc}"
+            log.warning("Failed to process %s: %s", behavior_file, error)
+            errors.append({
+                "subject": identity.subject,
+                "session": identity.session,
+                "task": identity.task,
+                "run": identity.run,
+                "source_path": str(behavior_file),
+                "exception_class": type(exc).__name__,
+                "message": str(exc),
+            })
+            results.append(EventResult(
+                identity=identity,
+                status="failed",
+                behavior_file=behavior_file,
+                events_file=None,
+                qc_file=None,
+                error=error,
+            ))
+        else:
+            results.append(EventResult(
+                identity=identity,
+                status="created",
+                behavior_file=behavior_file,
+                events_file=events_path,
+                qc_file=qc_path,
+                error=None,
+            ))
+
+    _write_conversion_errors(bids_dir, errors)
+    return tuple(results)
 
 
 def run_create_events(
