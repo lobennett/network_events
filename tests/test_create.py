@@ -1,8 +1,4 @@
 import pandas as pd
-import numpy as np
-import pytest
-from pathlib import Path
-from unittest.mock import patch
 
 
 def _make_stop_signal_csv(tmp_path):
@@ -33,33 +29,6 @@ def _make_stop_signal_csv(tmp_path):
     return csv_path
 
 
-class TestRunCreateEventsHelpers:
-    def test_discover_nifti_tasks_excludes_rest_only(self, tmp_path):
-        from network_events.create import discover_nifti_tasks
-        func = tmp_path / "func"
-        func.mkdir()
-        for name in (
-            "sub-s01_ses-01_task-flanker_run-1_bold.nii.gz",
-            "sub-s01_ses-01_task-rest_run-1_bold.nii.gz",
-            "sub-s01_ses-01_task-nBack_run-1_bold.nii.gz",
-        ):
-            (func / name).touch()
-        # Events are generated for ALL non-rest tasks; .bidsignore is intentionally
-        # NOT consulted at the events stage (exclusions enforced downstream).
-        assert discover_nifti_tasks(func) == {"flanker", "nBack"}
-
-    def test_group_csvs_by_task_filters_and_reads_run(self, tmp_path):
-        from network_events.create import group_csvs_by_task
-        beh = tmp_path / "beh"
-        beh.mkdir()
-        (beh / "sub-s01_ses-01_task-flanker_run-2_beh.csv").touch()
-        (beh / "sub-s01_ses-01_task-flanker_beh.csv").touch()  # no run -> 1
-        (beh / "sub-s01_ses-01_task-rest_beh.csv").touch()  # not allowed
-        out = group_csvs_by_task(beh, {"flanker"})
-        runs = sorted((t, r) for t, r, _ in out)
-        assert runs == [("flanker", 1), ("flanker", 2)]
-
-
 class TestCreateEventsDf:
     def test_produces_bids_columns(self, tmp_path):
         from network_events.create import create_events_df
@@ -85,7 +54,6 @@ class TestCreateEventsDf:
         assert not result.isnull().any().any()
 
 
-import pandas as pd
 from network_events.create import _set_default_event_cols
 
 def test_set_default_event_cols_applies_dummy_offset_and_units():

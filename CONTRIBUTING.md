@@ -1,7 +1,6 @@
 # Contributing
 
-Shared conventions for the `network_*` repos (`network_fmri`, `network_events`, `network_glm`,
-`network_qa`). This file is identical in each.
+Development conventions for the canonical `network_events` converter.
 
 ## Setup
 
@@ -41,4 +40,5 @@ Keep them small and test-first. Anything that changes what lands in a BIDS tree,
 `events.tsv`, or an exclusion lockfile should come with a test — these failures are silent, they
 produce no error and no visible artefact, only wrong models.
 
-Commands stay pure and idempotent so an operator can wrap them in `datalad run`.
+Run commands directly. The `network_fmri` orchestrator records completed pipeline
+milestones with one `datalad save` after validating the complete stage output.

@@ -1,10 +1,10 @@
 [project]
 name = "network_events"
-version = "0.1.0"
-description = "Study-specific behavioral + BIDS event-generation pipeline for the r01network project (raw jsPsych CSV -> _events.tsv + trial-retention metrics)."
+version = "0.2.0"
+description = "Audit canonical r01network behavioral/BOLD identities and generate BIDS events with timing evidence."
 readme = "README.md"
 requires-python = ">=3.11"
-# nibabel reads acquired scan length from NIfTI headers for onset clipping.
+# nibabel reads acquired BOLD duration from the NIfTI image.
 dependencies = ["numpy", "pandas", "nibabel"]
 
 [project.scripts]

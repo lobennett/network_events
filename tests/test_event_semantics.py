@@ -55,7 +55,7 @@ def _write_go_nogo_csv(path, *, metadata_gap=False, inherited_conditions=True):
 def _canonical_run(tmp_path, *, task="goNogo", sub="sub-synthetic", ses="ses-01", run=1,
                    n_volumes=100, tr=1.49, discarded=7):
     stem = f"{sub}_{ses}_task-{task}_run-{run}"
-    beh = tmp_path / "sourcedata" / sub / ses / "beh"
+    beh = tmp_path / "sourcedata" / "behavioral" / sub / ses / "beh"
     beh.mkdir(parents=True, exist_ok=True)
     func = tmp_path / sub / ses / "func"
     func.mkdir(parents=True, exist_ok=True)
@@ -68,7 +68,11 @@ def _canonical_run(tmp_path, *, task="goNogo", sub="sub-synthetic", ses="ses-01"
 
 
 def _create(tmp_path):
-    main(["create", "--sourcedata", str(tmp_path / "sourcedata"), "--bids-dir", str(tmp_path)])
+    main([
+        "create",
+        "--behavioral-dir", str(tmp_path / "sourcedata" / "behavioral"),
+        "--bids-dir", str(tmp_path),
+    ])
 
 
 @pytest.mark.parametrize("metadata_gap", [False, True])
@@ -161,13 +165,20 @@ def test_failed_rerun_cannot_retain_successful_trial_retention_sidecar(tmp_path)
     assert tsv.read_bytes() == original_events
     assert qc.read_bytes() == original_qc
 
-    # Missing trigger is already a hard conversion failure. The CLI writes an
-    # empty TSV, which must not be paired with the previous five-trial report.
+    # Missing trigger is a hard conversion failure. The CLI removes stale event
+    # and retention outputs and records the failure in the shared error table.
     source = pd.read_csv(raw)
     source[source.trial_id != "fmri_trigger_initial"].to_csv(raw, index=False)
     _create(tmp_path)
-    assert pd.read_csv(tsv, sep="\t").empty
+    assert not tsv.exists()
     assert not qc.exists()
+    errors = pd.read_csv(
+        tmp_path / "sourcedata" / "events_qc" / "conversion_errors.tsv",
+        sep="\t",
+    )
+    assert errors[["subject", "session", "task", "run"]].to_dict("records") == [{
+        "subject": "sub-synthetic", "session": "ses-01", "task": "goNogo", "run": 1,
+    }]
 
     _write_go_nogo_csv(raw)
     _create(tmp_path)

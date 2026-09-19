@@ -1,33 +1,70 @@
 # network_events
 
-Behavioural CSV → BIDS `_events.tsv` for the r01network study. Study-specific: the jsPsych
-battery, task naming and acquisition constants (`TR_SECONDS`, `N_DUMMY` in `config.py`) are
-hard-coded, and it is not a general-purpose library.
+`network_events` converts the canonical r01network behavioral CSV files into BIDS
+`_events.tsv` files. It is a study-specific package for the jsPsych battery and is
+normally run as a stage of the `network_fmri` pipeline.
 
-Normally invoked as stage 10 of `network_fmri pipeline`, which pins this package at a commit.
+The public command line interface has exactly two commands: `audit` checks the
+canonical identity contract and `create` converts every audited behavioral run.
+Data preparation and quality policy belong to the surrounding pipeline and to
+[`network_qa`](https://github.com/lobennett/network_qa).
 
 ## Install
 
 ```bash
-uv sync          # Python >=3.11; on a compute node, not a login node
+uv sync                  # Python >= 3.11
 ```
+
+## Canonical layout
+
+Behavioral input is rooted at `sourcedata/behavioral` and must contain one file
+per logical non-rest BOLD run:
+
+```
+sourcedata/behavioral/
+  sub-01/ses-01/beh/sub-01_ses-01_task-nBack_run-1_beh.csv
+```
+
+The matching BOLD file is under the BIDS `func` directory. Echoes are treated as
+one logical run. Identity matching is exact: subject, session, task, and run must
+match the BOLD filename and its `sub-*/ses-*/func/` parents, and the behavioral
+file must be in the matching `sub-*/ses-*/beh/` directory. BOLD supports `.nii`
+and `.nii.gz`; duplicate encodings, mixed echo/non-echo images, and entity
+variations other than unique numeric echoes fail the audit. Rest runs do not
+require behavioral input.
+
+If a run has no behavioral file, a reviewed exception can satisfy the audit. Put
+`behavioral_exceptions.tsv` at the behavioral root with these required columns:
+
+```text
+subject  session  task  run  reason  detail  reviewed_by  reviewed_at
+```
+
+Every field is required, identities use BIDS labels, and duplicate or orphan
+exceptions fail the audit. The `audit` command prints JSON containing `pairs`,
+`bold_groups` (the physical images for each logical run), `exceptions`, and `errors`; use `--json PATH` to save the same payload.
 
 ## Commands
 
 ```bash
-network-events create --sourcedata sourcedata --bids-dir .     # the one that matters
-network-events run --behavioral-dir <raw> --bids-dir <BIDS>    # create + optional migrations
-network-events migrate-archive --raw-dir <raw> --output-dir sourcedata
-network-events migrate-survey --survey-root <survey> --output-dir sourcedata
+network-events audit  --bids-dir . --behavioral-dir sourcedata/behavioral
+network-events create --bids-dir . --behavioral-dir sourcedata/behavioral
 ```
 
-`create` reads `sourcedata/sub-*/ses-*/beh/*_beh.csv` — one CSV per BOLD run, already paired —
-and writes `_events.tsv` beside each BOLD. The pairing is not done here: it is frozen in the
-canonical dataset on `$OAK` and copied in by `network_fmri ingest-beh`, which is why there is no
-reconciliation manifest or review gate any more.
+`audit` exits 0 only when both input roots are existing directories and every non-rest BOLD
+has exactly one canonical behavioral file or reviewed exception. `create` runs the
+same audit first, then writes one events file beside each matching BOLD:
 
-The two `migrate-*` commands move out-of-scanner practice data and prescan surveys into
-`sourcedata/`. They are optional and touch nothing `create` reads.
+```
+sub-01/ses-01/func/sub-01_ses-01_task-nBack_run-1_events.tsv
+```
+
+Each conversion is represented by a structured result. Successful runs report
+`created`; failed runs report `failed` and remove partial output. All failures are
+also written to `sourcedata/events_qc/conversion_errors.tsv` with the columns
+`subject`, `session`, `task`, `run`, `source_path`, `exception_class`, and
+`message`. Thus a conversion error remains visible instead of becoming an empty
+events file.
 
 ## Event columns and labels
 
@@ -37,104 +74,76 @@ The selected columns depend on the task. Missing values are written as `n/a`.
 | --- | --- |
 | `onset`, `duration`, `response_time` | Seconds; onsets follow the timing transformations below. |
 | `trial_id` | Event identity, such as `test_trial`, `test_cue`, `test_fixation`, or `break`. |
-| `trial_type` | Task-specific condition label, constructed from the selected raw condition fields and task cleanup. |
+| `trial_type` | Task-specific condition label, constructed from selected raw condition fields. |
 | `key_press`, `correct_response`, `acc` | Response codes and accuracy scored before cue-response placeholders are applied. |
 | Task condition columns | Selected source factors, which may retain inherited values on nontrial rows. |
 
-Canonical `break` and `break_with_performance_feedback` rows have `trial_type=n/a`
-across tasks. Other nontrial labels remain task-specific: stop fixations use
-`fixation`, go/no-go nontrials use `n/a`, and tasks without cleanup may retain a
-condition label. Named cues and fixations keep their event identity and timing.
-Consumers should select the intended `trial_id` alongside the task's condition fields.
+Canonical `break` and `break_with_performance_feedback` rows have
+`trial_type=n/a`. Other nontrial labels remain task-specific. Named cues and
+fixations keep their event identity and timing; consumers should select the
+intended `trial_id` alongside the task's condition fields.
 
-Declared bare/`__fmri` aliases share their task's vocabulary. Flanker/cued switching
-uses `stay_stay`, `switch_stay`, or `switch_switch` plus the separate
-`flanker_condition`; shape/spatial switching uses switch-by-shape composites such
-as `tstay_cswitch_SSS`, removing only a leading `td_same_`, `td_diff_`, or `td_na_`
-prefix and preserving already-normalized or other non-prefixed values.
-Shape/cued switching keeps its switch label separate from `shape_matching_condition`.
-These are different task contracts, not one universal vocabulary.
+Declared bare and `__fmri` aliases share their task's vocabulary. Flanker/cued
+switching uses `stay_stay`, `switch_stay`, or `switch_switch` plus a separate
+`flanker_condition`. Shape/spatial switching uses switch-by-shape composites such
+as `tstay_cswitch_SSS`, while shape/cued switching keeps its switch label separate
+from `shape_matching_condition`. These are task-specific contracts. The column
+lookups and cleanup live in [`utils.py`](src/network_events/utils.py) and
+[`create.py`](src/network_events/create.py); the
+[event-semantics audit](docs/CODE-REVIEW.md) records regression evidence and limits.
 
-The owners are the column/condition lookups and cleanup in
-[`utils.py`](src/network_events/utils.py), with event-ID renaming, cue propagation
-and break scoping in [`create.py`](src/network_events/create.py). The
-[dated audit](docs/CODE-REVIEW.md) records reproductions, downstream selector
-evidence and remaining limits.
+## Timing transformations
 
-## What `create` does to the timing
+`create` applies these data-integrity transformations in order:
 
-Three transformations, in order. All three are data-integrity fixes applied unconditionally —
-none is an exclusion decision, and none of them can fail loudly, so each is measured instead.
+1. Onsets are shifted by the discarded-volume count times `RepetitionTime` from
+   the run's BOLD sidecar. Events before time zero are dropped. An untrimmed run
+   must explicitly record a discarded-volume count of zero.
+2. Events are truncated at the first backward step in the raw `time_elapsed`
+   clock. Absolute timing after that logging discontinuity is not reliable.
+3. Events are clipped to the acquired NIfTI scan length. The sidecar's intended
+   volume count is not used for this check.
 
-**1. Onset shift.** `network_fmri trim` drops the first 7 volumes of every BOLD, so a trimmed run
-starts `7 × 1.49 = 10.43 s` later than the scanner did. Onsets shift by −10.43 s and anything
-landing before zero is dropped. The per-run truth comes from the sidecar
-(`NumberOfVolumesDiscardedByUser × RepetitionTime`), so an untrimmed run shifts by 0 and the
-correction cannot be applied twice.
+Every physical BOLD image must have a readable sidecar with a nonnegative integer
+`NumberOfVolumesDiscardedByUser` and finite positive `RepetitionTime`, plus a
+readable 4-D NIfTI with positive acquired duration. Sidecar and header TRs must
+agree, and echoes must agree on TR, discarded volumes, and acquired volume count.
+Headers with unspecified temporal units retain the historical seconds convention.
+Missing, invalid, or conflicting timing evidence produces a conversion-error row
+and no events file. There is no fallback to study constants or disabled clipping.
 
-**2. Non-monotonic truncation.** The raw jsPsych `time_elapsed` clock occasionally jumps backward
-mid-run — an ExpFactory logging glitch we cannot trace or fix at source. Absolute timing is
-unreliable past the jump, so the run is cut at the first backward step and only the clean
-monotonic prefix is kept.
+`create` exits 0 when every audited pair has either a valid events file or a
+recorded conversion failure; identity-audit errors exit 2 before conversion.
 
-**3. Scan-length clip.** A run aborted at the scanner leaves the behavioural session running, so
-the CSV describes trials that were never imaged; keeping them puts regressors past the end of the
-timeseries. Onsets are clipped to the acquired length, read from the NIfTI rather than the
-sidecar because `NumberOfTemporalPositions` records the *intended* volume count — one scan claims
-524 volumes for 223 acquired.
+Durations are preserved when an onset survives the scan-length clip. The command
+also writes truncation measurements to
+`sourcedata/events_qc/<sub>/<ses>/*_desc-truncation.json`, including expected and
+retained test trials, dropped-trial fractions, scan duration, and scan-clip
+counts. `network_events` records these facts; `network_qa` decides whether the
+loss is acceptable and applies study thresholds.
 
-`duration` is deliberately not clipped, so a final trial's box-car may end a few seconds past the
-last volume. The trial was presented and its onset is inside the scan; the design matrix simply
-has no timepoints for the tail. Truncating `duration` would misstate the stimulus.
-
-## The QC seam
-
-Both truncations drop trials, and neither this package nor `create` decides whether that loss is
-survivable. It writes the numbers to
-`sourcedata/events_qc/<sub>/<ses>/<sub>_<ses>_task-<T>_run-<N>_desc-truncation.json`:
-
-```json
-{"NTestTrialsExpected": 40, "NTestTrialsRetained": 12, "FractionTestTrialsDropped": 0.7,
- "ScanDurationSeconds": 59.6, "NScanTestTrialsDropped": 26,
- "FractionScanTestTrialsDropped": 0.65}
-```
-
-The first three describe the non-monotonic cut, the `Scan*` keys the clip to the acquired
-scan. [`network_qa`](https://github.com/lobennett/network_qa) reads them and applies the
-threshold.
-
-The sidecar lives under `sourcedata/` with a non-reserved `_desc-truncation` name rather than as
-an `_events.json` in `func/`: BIDS reserves the latter for events-column descriptions and
-bids-validator rejects it.
-
-When conversion fails, `create` warns, writes a header-only `_events.tsv`, and removes any
-truncation sidecar from an earlier successful conversion of that run. Successful conversions
-write a sidecar even when no trials were dropped; a missing sidecar is not evidence of zero loss.
-
-## Layout
+## Package layout
 
 ```
 src/network_events/
-  cli.py         four subcommands
-  run.py         orchestration: create, plus the optional migrations
-  create.py      CSV -> events.tsv, and the three timing transformations
-  migrate.py     out-of-scanner and survey data -> sourcedata/
-  utils.py       shared helpers (incl. find_nonmonotonic_cut)
-  config.py      TR_SECONDS, N_DUMMY -- vendored, so no dependency on network_fmri
-  qc_globals.py  per-task behavioural thresholds; reference only, unused
+  cli.py       the `audit` and `create` commands
+  identity.py  exact BOLD/behavior identity audit and exception schema
+  create.py    CSV conversion, timing transforms, and structured errors
+  config.py    study timing constants
+  utils.py     shared timing and event helpers
 ```
 
 ## Tests
 
 ```bash
 uv sync --frozen --group dev
-uv run --frozen pytest -q -ra
+uv run --frozen pytest -q
+uv build
 ```
 
-GitHub Actions runs the full suite on Linux with Python 3.11 and 3.12 for pushes and
-pull requests. Tests generate synthetic behavioural CSVs, NIfTIs, and directory trees;
-no participant data or cluster access is needed. This checks software behaviour,
-not acquisition-data validation or the full `network_fmri` pipeline on Sherlock.
+GitHub Actions runs the full suite on Linux with Python 3.11 and 3.12. Tests use
+synthetic behavioral CSVs, NIfTIs, and directory trees; they do not require
+participant data or cluster access.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[event-generation code review](docs/CODE-REVIEW.md) for regression evidence and limits.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions and the
+[event-semantics audit](docs/CODE-REVIEW.md) for regression evidence and limits.
