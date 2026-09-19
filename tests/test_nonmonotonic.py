@@ -7,8 +7,8 @@ unreliable absolute timing, so:
   * ``create_events_df`` TRUNCATES the events at the first non-monotonic onset
     (keeps the clean monotonic prefix). Always applied -- a data-integrity fix,
     not a policy decision.
-  * ``events_truncation_stats`` / the ``_events.json`` sidecar written by
-    ``run_create_events`` MEASURE how many test trials that truncation dropped.
+  * ``events_truncation_stats`` / the ``_desc-truncation.json`` sidecar written by
+    ``create_events`` MEASURE how many test trials that truncation dropped.
     Deciding whether that loss is small enough to keep the run is
     ``network_qa``'s job, not this package's -- no threshold is applied here.
 
@@ -182,27 +182,27 @@ class TestTruncationStatsRecorded:
         assert abs(stats["fraction_test_dropped"] - 0.7) < 1e-9
 
     def test_sidecar_json_surfaces_metric(self, tmp_path):
-        """run_create_events writes a truncation-QC sidecar network_qa can read.
+        """create_events writes a truncation-QC sidecar network_qa can read.
 
         The sidecar lives OUT of func/ -- under sourcedata/events_qc/ with a
         non-reserved ``_desc-truncation.json`` name -- so bids-validator does
         not reject it (``_events.json`` in func/ is reserved for events-column
         descriptions). No ``_events.json`` is written into func/.
         """
-        from network_events.create import run_create_events
+        from tests.helpers import audited_create, write_bold
 
-        beh = tmp_path / "sourcedata" / "sub-s01" / "ses-01" / "beh"
+        beh = tmp_path / "sourcedata" / "behavioral" / "sub-s01" / "ses-01" / "beh"
         beh.mkdir(parents=True)
         _make_backward_jump_csv(
-            beh / "sub-s01_ses-01_task-flanker_beh.csv",
+            beh / "sub-s01_ses-01_task-flanker_run-1_beh.csv",
             n_trials=40,
             jump_after_test_trial=12,
         )
         func_dir = tmp_path / "sub-s01" / "ses-01" / "func"
         func_dir.mkdir(parents=True)
-        (func_dir / "sub-s01_ses-01_task-flanker_run-1_bold.nii.gz").touch()
+        write_bold(func_dir / "sub-s01_ses-01_task-flanker_run-1_bold.nii.gz")
 
-        run_create_events(behavioral_dir=tmp_path / "sourcedata", bids_dir=tmp_path)
+        assert audited_create(tmp_path)[0].status == "created"
 
         events_tsv = func_dir / "sub-s01_ses-01_task-flanker_run-1_events.tsv"
         assert events_tsv.exists()

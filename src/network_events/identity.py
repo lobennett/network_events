@@ -11,7 +11,10 @@ _BEHAVIOR_RE = re.compile(
     r"^(?P<subject>sub-[A-Za-z0-9]+)_(?P<session>ses-[A-Za-z0-9]+)_task-(?P<task>[A-Za-z0-9]+)_run-(?P<run>[A-Za-z0-9]+)_beh\.csv$"
 )
 _BOLD_RE = re.compile(
-    r"^(?P<subject>sub-[A-Za-z0-9]+)_(?P<session>ses-[A-Za-z0-9]+)_task-(?P<task>[A-Za-z0-9]+)_run-(?P<run>[A-Za-z0-9]+)(?:_[A-Za-z0-9]+-[A-Za-z0-9]+)*_bold\.nii(?:\.gz)?$"
+    r"^(?P<subject>sub-[A-Za-z0-9]+)_(?P<session>ses-[A-Za-z0-9]+)_task-(?P<task>[A-Za-z0-9]+)_run-(?P<run>[A-Za-z0-9]+)(?:_echo-(?P<echo>[0-9]+))?_bold\.nii(?:\.gz)?$"
+)
+_BOLD_PREFIX_RE = re.compile(
+    r"^(?P<subject>sub-[A-Za-z0-9]+)_(?P<session>ses-[A-Za-z0-9]+)_task-(?P<task>[A-Za-z0-9]+)_run-(?P<run>[A-Za-z0-9]+)_"
 )
 _EXCEPTION_COLUMNS = (
     "subject", "session", "task", "run", "reason", "detail", "reviewed_by", "reviewed_at"
@@ -38,14 +41,23 @@ class BehaviorException:
 
 
 @dataclass(frozen=True)
+class BoldGroup:
+    """Physical images belonging to one unambiguous logical acquisition."""
+
+    identity: RunIdentity
+    files: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
 class AuditResult:
     pairs: tuple[tuple[RunIdentity, Path], ...]
     exceptions: tuple[BehaviorException, ...]
     errors: tuple[str, ...]
+    bold_groups: tuple[BoldGroup, ...] = ()
 
 
 def _identity(match: re.Match[str]) -> RunIdentity:
-    return RunIdentity(**match.groupdict())
+    return RunIdentity(*(match.group(key) for key in ("subject", "session", "task", "run")))
 
 
 def _read_exceptions(path: Path) -> tuple[dict[RunIdentity, BehaviorException], list[str]]:
@@ -91,10 +103,52 @@ def _read_exceptions(path: Path) -> tuple[dict[RunIdentity, BehaviorException], 
     return exceptions, errors
 
 
+def discover_bold_groups(bids_dir: Path) -> tuple[tuple[BoldGroup, ...], tuple[str, ...]]:
+    """Reject identity collisions before collapsing the expected echo variation."""
+    bids_dir = Path(bids_dir)
+    if not bids_dir.is_dir():
+        return (), (f"{bids_dir}: BIDS root is not an existing directory",)
+    files: dict[RunIdentity, list[Path]] = {}
+    echoes: dict[RunIdentity, set[int | None]] = {}
+    unusable: set[RunIdentity] = set()
+    errors: list[str] = []
+    for path in sorted(bids_dir.glob("sub-*/ses-*/func/*_bold.nii*")):
+        match = _BOLD_RE.fullmatch(path.name)
+        if match is None:
+            errors.append(f"{path}: unparseable BOLD file (only echo variation is supported)")
+            prefix = _BOLD_PREFIX_RE.match(path.name)
+            if prefix:
+                unusable.add(_identity(prefix))
+            continue
+        identity = _identity(match)
+        files.setdefault(identity, []).append(path)
+        expected = (identity.subject, identity.session, "func", path.name)
+        if path.relative_to(bids_dir).parts != expected:
+            errors.append(f"{path}: noncanonical BOLD path")
+            unusable.add(identity)
+        echo = int(match.group("echo")) if match.group("echo") else None
+        observed = echoes.setdefault(identity, set())
+        if echo == 0 or echo in observed or (observed and (echo is None or None in observed)):
+            errors.append(f"{identity.display()}: ambiguous duplicate physical BOLD acquisition: {path}")
+            unusable.add(identity)
+        observed.add(echo)
+    groups = tuple(
+        BoldGroup(identity, tuple(files[identity]))
+        for identity in sorted(files) if identity not in unusable
+    )
+    return groups, tuple(sorted(errors))
+
+
 def audit_dataset(bids_dir: Path, behavioral_dir: Path) -> AuditResult:
     """Require one canonical behavior file or reviewed exception per non-rest BOLD."""
     bids_dir, behavioral_dir = Path(bids_dir), Path(behavioral_dir)
-    errors: list[str] = []
+    errors = [
+        f"{root}: {label} root is not an existing directory"
+        for root, label in ((bids_dir, "BIDS"), (behavioral_dir, "behavioral"))
+        if not root.is_dir()
+    ]
+    if errors:
+        return AuditResult(pairs=(), exceptions=(), errors=tuple(errors))
     behavior_files: dict[RunIdentity, Path] = {}
     seen_behavior: set[RunIdentity] = set()
     unusable_behavior: set[RunIdentity] = set()
@@ -115,14 +169,9 @@ def audit_dataset(bids_dir: Path, behavioral_dir: Path) -> AuditResult:
             continue
         behavior_files[identity] = csv_path
 
-    bolds: set[RunIdentity] = set()
-    bold_paths = bids_dir.glob("sub-*/ses-*/func/*_bold.nii*")
-    for bold_path in sorted(bold_paths):
-        match = _BOLD_RE.fullmatch(bold_path.name)
-        if match is None:
-            errors.append(f"{bold_path}: unparseable BOLD file")
-            continue
-        bolds.add(_identity(match))
+    bold_groups, bold_errors = discover_bold_groups(bids_dir)
+    errors.extend(bold_errors)
+    bolds = {group.identity for group in bold_groups}
 
     exceptions, exception_errors = _read_exceptions(behavioral_dir / "behavioral_exceptions.tsv")
     errors.extend(exception_errors)
@@ -150,4 +199,6 @@ def audit_dataset(bids_dir: Path, behavioral_dir: Path) -> AuditResult:
         and identity not in exceptions
     )
     reviewed = tuple(exceptions[identity] for identity in sorted(exceptions))
-    return AuditResult(pairs=pairs, exceptions=reviewed, errors=tuple(sorted(errors)))
+    return AuditResult(
+        pairs=pairs, exceptions=reviewed, errors=tuple(sorted(errors)), bold_groups=bold_groups
+    )

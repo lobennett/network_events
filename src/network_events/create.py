@@ -10,12 +10,12 @@ data-integrity fixes rather than policy (see README.md for the full reasoning):
    were never imaged.
 
 Both truncations drop trials and neither decides whether the survivor is usable --
-that is ``network_qa``'s call. :func:`run_create_events` writes the cost of each to
+that is ``network_qa``'s call. :func:`create_events` writes the cost of each to
 ``sourcedata/events_qc/<sub>/<ses>/..._desc-truncation.json`` for it to threshold on.
 """
 import json
 import logging
-import re
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal
@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 from network_events.config import N_DUMMY, TR_SECONDS
-from network_events.identity import RunIdentity
+from network_events.identity import RunIdentity, discover_bold_groups
 from network_events.utils import (
     get_neg_rt_correction,
     cal_time_elapsed,
@@ -89,59 +89,74 @@ def _rename_cells(df: pd.DataFrame, exp_id: str) -> pd.DataFrame:
     return df
 
 
-DUMMY_OFFSET_S = N_DUMMY * TR_SECONDS  # 10.43s fallback when no sidecar is available
+DUMMY_OFFSET_S = N_DUMMY * TR_SECONDS  # Default only for pure dataframe transformations.
 
 
-def dummy_offset_from_sidecar(func_dir: Path, sub: str, ses: str, task: str,
-                              run: int | str) -> float:
-    """Onset shift implied by the BOLD sidecar, in seconds.
+class TimingEvidenceError(ValueError):
+    """The run cannot be aligned without complete, consistent BOLD timing evidence."""
 
-    Preferred over the module constants: `NumberOfVolumesDiscardedByUser` x
-    `RepetitionTime` is per-run truth, so a run that was never trimmed shifts by 0
-    and the correction cannot be applied twice or to the wrong TR. Falls back to
-    the constants (with a warning) only when no sidecar can be read.
+
+def _positive_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        and math.isfinite(value) and value > 0
+    )
+
+
+def _read_run_timing(files: tuple[Path, ...]) -> tuple[float, float]:
+    """Read every physical image and its sidecar; echoes must agree on timing.
+
+    NIfTI volume counts describe the acquired (already trimmed) run. The sidecar
+    must explicitly record zero discarded volumes for an untrimmed image.
     """
-    pattern = f"{sub}_{ses}_task-{task}_run-{run}_*bold.json"
-    for cand in sorted(func_dir.glob(pattern)):
+    if not files:
+        raise TimingEvidenceError("no BOLD images available for this run")
+    reference: tuple[int, float, int] | None = None
+    for path in files:
+        sidecar = path.with_name(path.name.split(".nii")[0] + ".json")
         try:
-            meta = json.loads(cand.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        n = meta.get("NumberOfVolumesDiscardedByUser")
-        tr = meta.get("RepetitionTime")
-        if n is not None and tr:
-            return float(n) * float(tr)
-        if tr:
-            log.warning("%s has no NumberOfVolumesDiscardedByUser; assuming untrimmed",
-                        cand.name)
-            return 0.0
-    log.warning("no BOLD sidecar for %s %s task-%s run-%s; falling back to %.2fs",
-                sub, ses, task, run, DUMMY_OFFSET_S)
-    return DUMMY_OFFSET_S
-
-
-def acquired_duration(func_dir: Path, sub: str, ses: str, task: str,
-                      run: int | str) -> float | None:
-    """Seconds of BOLD actually acquired for a run, or ``None`` if unreadable.
-
-    Read from the NIfTI, not the sidecar: ``NumberOfTemporalPositions`` records the
-    intended volume count, so an aborted run reports the full length it never reached.
-    The tree is already trimmed at this point, so onsets shifted by ``offset_s`` share
-    this origin and the valid window is ``[0, duration)``.
-    """
-    pattern = f"{sub}_{ses}_task-{task}_run-{run}_*bold.nii.gz"
-    for cand in sorted(func_dir.glob(pattern)):
+            meta = json.loads(sidecar.read_text())
+            if not isinstance(meta, dict):
+                raise ValueError("sidecar must contain a JSON object")
+            discarded = meta.get("NumberOfVolumesDiscardedByUser")
+            tr = meta.get("RepetitionTime")
+            if type(discarded) is not int or discarded < 0:
+                raise ValueError("NumberOfVolumesDiscardedByUser must be a nonnegative integer")
+            if not _positive_number(tr):
+                raise ValueError("RepetitionTime must be a finite positive number")
+        except (OSError, ValueError) as exc:
+            raise TimingEvidenceError(f"{sidecar}: invalid or unreadable timing sidecar: {exc}") from exc
         try:
-            img = nib.load(cand)
-            n = img.shape[3]
-            tr = float(img.header.get_zooms()[3])
-        except (OSError, IndexError, ValueError, nib.filebasedimages.ImageFileError):
-            continue
-        if n and tr:
-            return n * tr
-    log.warning("no readable BOLD for %s %s task-%s run-%s; not clipping to scan length",
-                sub, ses, task, run)
-    return None
+            img = nib.load(path)
+            if len(img.shape) != 4 or any(n <= 0 for n in img.shape):
+                raise ValueError("BOLD must be a nonempty 4-D image")
+            volumes = img.shape[3]
+            header_tr = float(img.header.get_zooms()[3])
+            unit = img.header.get_xyzt_units()[1]
+            # Preserve seconds for older headers with unspecified units.
+            scale = {"unknown": 1, "sec": 1, "msec": 0.001, "usec": 0.000001}.get(unit)
+            if scale is None:
+                raise ValueError(f"unsupported NIfTI temporal units: {unit}")
+            header_tr *= scale
+            if not _positive_number(header_tr):
+                raise ValueError("NIfTI TR must be a finite positive number")
+            if not math.isclose(header_tr, tr, rel_tol=1e-6, abs_tol=1e-6):
+                raise ValueError("NIfTI TR conflicts with sidecar RepetitionTime")
+            # Read the last volume as well as the header, detecting missing/truncated data.
+            np.asanyarray(img.dataobj[..., -1])
+        except (OSError, ValueError, EOFError, nib.filebasedimages.ImageFileError) as exc:
+            raise TimingEvidenceError(f"{path}: invalid or unreadable BOLD duration: {exc}") from exc
+        timing = (discarded, float(tr), volumes)
+        if reference is not None and timing != reference:
+            raise TimingEvidenceError(f"{path}: conflicting timing evidence across BOLD echoes")
+        reference = timing
+    discarded, tr, volumes = reference
+    # Use the common header TR for acquired duration, as in the original timing transform.
+    duration = volumes * header_tr
+    offset = discarded * tr
+    if not math.isfinite(duration) or not math.isfinite(offset):
+        raise TimingEvidenceError("BOLD duration and onset shift must be finite")
+    return offset, duration
 
 
 def _scan_overrun(df: pd.DataFrame, scan_s: float | None):
@@ -164,7 +179,7 @@ def _set_default_event_cols(df: pd.DataFrame, offset_s: float = DUMMY_OFFSET_S) 
     df["response_time"] = df["response_time"].replace(-0.001, np.nan)
 
     # Adjust onsets for volumes the imaging pipeline discarded (per-run, from the
-    # sidecar where available).
+    # sidecar).
     df["onset"] = df["onset"] - offset_s
     df = df[df["onset"] >= 0]
     first_columns = ["onset", "duration", "response_time", "trial_id", "trial_type", "key_press", "correct_response"]
@@ -176,19 +191,6 @@ def _set_default_event_cols(df: pd.DataFrame, offset_s: float = DUMMY_OFFSET_S) 
 def _flagged_feedback(text_content: str) -> bool:
     keywords = ["accuracy", "slowly", "respond", "response"]
     return any(keyword in text_content.lower() for keyword in keywords)
-
-
-def create_empty_events_df() -> pd.DataFrame:
-    """Create empty events DataFrame with required BIDS columns."""
-    return pd.DataFrame(columns=[
-        "onset",
-        "duration",
-        "trial_id",
-        "trial_type",
-        "response_time",
-        "key_press",
-        "correct_response",
-    ])
 
 
 def _get_rows_with_feedback(df: pd.DataFrame, original_df: pd.DataFrame):
@@ -352,45 +354,6 @@ def events_truncation_stats(filename: Path, short_name: str,
     }
 
 
-def discover_nifti_tasks(func_dir: Path) -> set[str]:
-    """Non-rest task labels that have a BOLD NIfTI in ``func_dir``.
-
-    Events are generated for every such task. Scan exclusion is intentionally
-    NOT applied here: the authoritative mechanism is the compiled-exclusions
-    system (enforced downstream at lev1), so ``.bidsignore`` is not consulted at
-    the events stage. (A prior ``.bidsignore`` filter here was a silent no-op —
-    its greedy task token, e.g. ``flanker_run``, never matched the bare task
-    ``flanker`` discovered here — so it is removed rather than resurrected.)
-    """
-    tasks: set[str] = set()
-    for nii in func_dir.glob("*.nii.gz"):
-        m = re.search(r"task-([^_]+)", nii.name)
-        if m and m.group(1) != "rest":
-            tasks.add(m.group(1))
-    return tasks
-
-
-def group_csvs_by_task(
-    beh_dir: Path, allowed_tasks: set[str]
-) -> list[tuple[str, int, Path]]:
-    """Group behavioral CSVs by ``(task, run)``, keeping only ``allowed_tasks``.
-
-    Run number is read from a ``run-<n>`` token in the filename, defaulting to 1.
-    """
-    out: list[tuple[str, int, Path]] = []
-    for csv_file in sorted(beh_dir.glob("*.csv")):
-        m = re.search(r"task-([^_]+)", csv_file.name)
-        if not m:
-            continue
-        task_name = m.group(1)
-        if task_name not in allowed_tasks:
-            continue
-        run_m = re.search(r"run-(\d+)", csv_file.name)
-        run_num = int(run_m.group(1)) if run_m else 1
-        out.append((task_name, run_num, csv_file))
-    return out
-
-
 def truncation_sidecar_path(
     bids_dir: Path, sub: str, ses: str, task: str, run: int | str
 ) -> Path:
@@ -483,6 +446,8 @@ def create_events(
 ) -> tuple[EventResult, ...]:
     """Convert exact audited pairs and account for every pair in the returned results."""
     bids_dir = Path(bids_dir)
+    groups, inventory_errors = discover_bold_groups(bids_dir)
+    bold_files = {group.identity: group.files for group in groups}
     results: list[EventResult] = []
     errors: list[dict[str, str]] = []
 
@@ -492,14 +457,10 @@ def create_events(
         qc_path = truncation_sidecar_path(
             bids_dir, identity.subject, identity.session, identity.task, identity.run
         )
-        func_dir = events_path.parent
         try:
-            offset_s = dummy_offset_from_sidecar(
-                func_dir, identity.subject, identity.session, identity.task, identity.run
-            )
-            scan_s = acquired_duration(
-                func_dir, identity.subject, identity.session, identity.task, identity.run
-            )
+            if inventory_errors:
+                raise TimingEvidenceError("; ".join(inventory_errors))
+            offset_s, scan_s = _read_run_timing(bold_files.get(identity, ()))
             df = create_events_df(behavior_file, identity.task, offset_s, scan_s)
             tstats = events_truncation_stats(behavior_file, identity.task, offset_s, scan_s)
             _write_events(events_path, df)
@@ -538,74 +499,3 @@ def create_events(
 
     _write_conversion_errors(bids_dir, errors)
     return tuple(results)
-
-
-def run_create_events(
-    behavioral_dir: Path,
-    bids_dir: Path,
-    subjects: list[str] | None = None,
-    sessions: list[str] | None = None,
-) -> None:
-    """Walk sourcedata behavioral CSVs and write BIDS event files.
-
-    Args:
-        behavioral_dir: Path to sourcedata/ with sub-*/ses-*/beh/*.csv
-        bids_dir: Path to BIDS dataset root (events written to func/ dirs)
-        subjects: Optional list of subjects to process (default: all)
-        sessions: Optional list of sessions to process (default: all)
-
-    For each ``_events.tsv``, writes a truncation-QC sidecar carrying the
-    non-monotonic-truncation trial-retention metric at
-    ``sourcedata/events_qc/<sub>/<ses>/<sub>_<ses>_task-<task>_run-<run>_desc-truncation.json``
-    (see :func:`events_truncation_stats` / :func:`truncation_sidecar_path` /
-    :func:`_write_truncation_sidecar`). It is written under ``sourcedata/`` --
-    not as an ``_events.json`` in ``func/`` -- so bids-validator does not reject
-    it. No exclusion decision is made here -- that is ``network_qa``'s job.
-    """
-    for sub_dir in sorted(behavioral_dir.glob("sub-*")):
-        if subjects and sub_dir.name not in subjects:
-            continue
-        for ses_dir in sorted(sub_dir.glob("ses-*")):
-            if sessions and ses_dir.name not in sessions:
-                continue
-            beh_dir = ses_dir / "beh"
-            if not beh_dir.exists():
-                continue
-            func_dir = bids_dir / sub_dir.name / ses_dir.name / "func"
-            if not func_dir.exists():
-                log.warning("No func dir for %s %s, skipping", sub_dir.name, ses_dir.name)
-                continue
-
-            nifti_tasks = discover_nifti_tasks(func_dir)
-            task_run_files = group_csvs_by_task(beh_dir, nifti_tasks)
-
-            tasks_with_events = set()
-
-            for task_name, run_num, csv_file in task_run_files:
-                outname = f"{sub_dir.name}_{ses_dir.name}_task-{task_name}_run-{run_num}_events.tsv"
-                outpath = func_dir / outname
-
-                tstats = None
-                try:
-                    offset_s = dummy_offset_from_sidecar(
-                        func_dir, sub_dir.name, ses_dir.name, task_name, run_num)
-                    scan_s = acquired_duration(
-                        func_dir, sub_dir.name, ses_dir.name, task_name, run_num)
-                    df = create_events_df(csv_file, task_name, offset_s, scan_s)
-                    tstats = events_truncation_stats(
-                        csv_file, task_name, offset_s, scan_s)
-                    log.info("Writing events.tsv: %s", outpath)
-                except Exception as e:
-                    log.warning(
-                        "Failed to process %s: %s. Writing empty events.tsv.",
-                        csv_file, e,
-                    )
-                    df = create_empty_events_df()
-
-                df.to_csv(outpath, sep="\t", index=False, na_rep="n/a")
-                if tstats is not None:
-                    sidecar_path = truncation_sidecar_path(
-                        bids_dir, sub_dir.name, ses_dir.name, task_name, run_num
-                    )
-                    _write_truncation_sidecar(sidecar_path, tstats)
-                tasks_with_events.add(task_name)

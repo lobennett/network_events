@@ -12,43 +12,10 @@ regressors for timepoints that do not exist. So:
 Scan length is read from the NIfTI, not the sidecar: ``NumberOfTemporalPositions``
 records the intended volume count, so an aborted run reports a length it never reached.
 """
-import nibabel as nib
-import numpy as np
-
 from tests.test_nonmonotonic import _make_flanker_csv
 
 
-def _write_bold(path, n_volumes, tr=1.49):
-    """A minimal 4-D NIfTI with a real TR in its header."""
-    img = nib.Nifti1Image(np.zeros((2, 2, 2, n_volumes), dtype=np.int16), np.eye(4))
-    img.header.set_zooms((1.0, 1.0, 1.0, tr))
-    nib.save(img, path)
-    return path
-
-
-class TestAcquiredDuration:
-    def test_reads_volumes_times_tr(self, tmp_path):
-        from network_events.create import acquired_duration
-
-        _write_bold(tmp_path / "sub-s01_ses-01_task-flanker_run-1_bold.nii.gz", 100)
-        # The header stores the TR as float32, so compare approximately.
-        got = acquired_duration(tmp_path, "sub-s01", "ses-01", "flanker", 1)
-        assert abs(got - 149.0) < 1e-4
-
-    def test_matches_multiecho_names(self, tmp_path):
-        from network_events.create import acquired_duration
-
-        _write_bold(
-            tmp_path / "sub-s01_ses-01_task-flanker_run-1_echo-1_bold.nii.gz", 50)
-        got = acquired_duration(tmp_path, "sub-s01", "ses-01", "flanker", 1)
-        assert abs(got - 74.5) < 1e-4
-
-    def test_missing_or_unreadable_returns_none(self, tmp_path):
-        from network_events.create import acquired_duration
-
-        assert acquired_duration(tmp_path, "sub-s01", "ses-01", "flanker", 1) is None
-        (tmp_path / "sub-s01_ses-01_task-flanker_run-1_bold.nii.gz").touch()
-        assert acquired_duration(tmp_path, "sub-s01", "ses-01", "flanker", 1) is None
+from tests.helpers import audited_create, write_bold as _write_bold
 
 
 class TestCreateEventsClips:
@@ -106,18 +73,17 @@ class TestScanStatsRecorded:
 
 
 class TestEndToEnd:
-    def test_run_create_events_clips_against_the_real_nifti(self, tmp_path):
-        from network_events.create import run_create_events
+    def test_audited_create_clips_against_the_real_nifti(self, tmp_path):
 
-        beh = tmp_path / "sourcedata" / "sub-s01" / "ses-01" / "beh"
+        beh = tmp_path / "sourcedata" / "behavioral" / "sub-s01" / "ses-01" / "beh"
         beh.mkdir(parents=True)
-        _make_flanker_csv(beh / "sub-s01_ses-01_task-flanker_beh.csv", n_trials=40)
+        _make_flanker_csv(beh / "sub-s01_ses-01_task-flanker_run-1_beh.csv", n_trials=40)
         func = tmp_path / "sub-s01" / "ses-01" / "func"
         func.mkdir(parents=True)
         # 40 volumes x 1.49 s = 59.6 s of scan against 137 s of task.
         _write_bold(func / "sub-s01_ses-01_task-flanker_run-1_bold.nii.gz", 40)
 
-        run_create_events(behavioral_dir=tmp_path / "sourcedata", bids_dir=tmp_path)
+        assert audited_create(tmp_path)[0].status == "created"
 
         import pandas as pd
         ev = pd.read_csv(
@@ -130,16 +96,15 @@ class TestSidecarCarriesBothTruncations:
     def test_scan_keys_reach_network_qa(self, tmp_path):
         """The clip's cost must reach the sidecar, or network_qa cannot threshold on it."""
         import json
-        from network_events.create import run_create_events
 
-        beh = tmp_path / "sourcedata" / "sub-s01" / "ses-01" / "beh"
+        beh = tmp_path / "sourcedata" / "behavioral" / "sub-s01" / "ses-01" / "beh"
         beh.mkdir(parents=True)
-        _make_flanker_csv(beh / "sub-s01_ses-01_task-flanker_beh.csv", n_trials=40)
+        _make_flanker_csv(beh / "sub-s01_ses-01_task-flanker_run-1_beh.csv", n_trials=40)
         func = tmp_path / "sub-s01" / "ses-01" / "func"
         func.mkdir(parents=True)
         _write_bold(func / "sub-s01_ses-01_task-flanker_run-1_bold.nii.gz", 40)
 
-        run_create_events(behavioral_dir=tmp_path / "sourcedata", bids_dir=tmp_path)
+        assert audited_create(tmp_path)[0].status == "created"
 
         sidecar = json.loads((
             tmp_path / "sourcedata" / "events_qc" / "sub-s01" / "ses-01"

@@ -21,6 +21,10 @@ def _audit_payload(result: AuditResult) -> dict[str, object]:
             }
             for identity, behavior_file in result.pairs
         ],
+        "bold_groups": [
+            {"identity": group.identity.display(), "files": [str(path) for path in group.files]}
+            for group in result.bold_groups
+        ],
         "exceptions": [
             {
                 "subject": exception.identity.subject,
@@ -56,13 +60,13 @@ def _audit(args: argparse.Namespace) -> int:
     _print_payload(payload)
     if args.json is not None:
         _write_json(args.json, payload)
-    return 0 if args.behavioral_dir.is_dir() and not result.errors else 2
+    return 0 if not result.errors else 2
 
 
 def _create(args: argparse.Namespace) -> int:
     result = audit_dataset(args.bids_dir, args.behavioral_dir)
     payload = _audit_payload(result)
-    if not args.behavioral_dir.is_dir() or result.errors:
+    if result.errors:
         _print_payload({"audit": payload, "created": 0, "failed": 0})
         return 2
 

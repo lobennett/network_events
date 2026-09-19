@@ -7,6 +7,7 @@ from pathlib import Path
 
 from network_events.identity import RunIdentity
 from tests.test_nonmonotonic import _make_flanker_csv
+from tests.helpers import audited_create, write_bold
 
 
 def expected_events_path(bids: Path, identity: RunIdentity) -> Path:
@@ -31,7 +32,8 @@ def _pair(tmp_path: Path, *, valid: bool) -> tuple[Path, tuple[RunIdentity, Path
         / f"{identity.subject}_{identity.session}_task-{identity.task}_run-{identity.run}_beh.csv"
     )
     behavior.parent.mkdir(parents=True)
-    (bids / identity.subject / identity.session / "func").mkdir(parents=True)
+    write_bold(bids / identity.subject / identity.session / "func"
+               / "sub-s01_ses-01_task-flanker_run-1_bold.nii.gz")
     if valid:
         _make_flanker_csv(behavior, n_trials=3)
     else:
@@ -53,8 +55,6 @@ def read_tsv(path: Path) -> list[dict[str, str]]:
 
 
 def test_conversion_failure_writes_evidence_not_empty_events(tmp_path):
-    from network_events.create import create_events
-
     bids, pair = invalid_behavior_pair(tmp_path)
     events_path = expected_events_path(bids, pair[0])
     qc_path = _expected_qc_path(bids, pair[0])
@@ -62,7 +62,7 @@ def test_conversion_failure_writes_evidence_not_empty_events(tmp_path):
     qc_path.parent.mkdir(parents=True)
     qc_path.write_text("{}")
 
-    results = create_events(bids, [pair])
+    results = audited_create(bids)
 
     assert results[0].status == "failed"
     assert results[0].events_file is None
@@ -83,10 +83,8 @@ def test_conversion_failure_writes_evidence_not_empty_events(tmp_path):
 
 
 def test_success_is_atomic_and_writes_truncation_evidence(tmp_path):
-    from network_events.create import create_events
-
     bids, pair = valid_behavior_pair(tmp_path)
-    result, = create_events(bids, [pair])
+    result, = audited_create(bids)
 
     assert result.status == "created"
     assert result.events_file == expected_events_path(bids, pair[0])
