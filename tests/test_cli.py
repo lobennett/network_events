@@ -1,6 +1,8 @@
 """Public CLI contracts for the canonical identity workflow."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from network_events.cli import main
 
 
@@ -18,3 +20,10 @@ def test_create_refuses_unaudited_identity_errors(tmp_path):
         "create", "--bids-dir", str(tmp_path),
         "--behavioral-dir", str(tmp_path / "behavioral"),
     ]) == 2
+
+
+def test_readme_documents_only_public_commands():
+    text = Path("README.md").read_text()
+    assert "network-events audit" in text
+    assert "network-events create" in text
+    assert "migrate-archive" not in text
