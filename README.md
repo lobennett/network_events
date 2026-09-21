@@ -17,11 +17,12 @@ uv sync                  # Python >= 3.11
 
 ## Canonical layout
 
-Behavioral input is rooted at `sourcedata/behavioral` and must contain one file
+In the canonical dataset, behavioral input is rooted at
+`sourcedata/behavioral/in_scanner` and must contain one file
 per logical non-rest BOLD run:
 
 ```
-sourcedata/behavioral/
+sourcedata/behavioral/in_scanner/
   sub-01/ses-01/beh/sub-01_ses-01_task-nBack_run-1_beh.csv
 ```
 
@@ -47,8 +48,8 @@ exceptions fail the audit. The `audit` command prints JSON containing `pairs`,
 ## Commands
 
 ```bash
-network-events audit  --bids-dir . --behavioral-dir sourcedata/behavioral
-network-events create --bids-dir . --behavioral-dir sourcedata/behavioral
+network-events audit  --bids-dir . --behavioral-dir sourcedata/behavioral/in_scanner
+network-events create --bids-dir . --behavioral-dir sourcedata/behavioral/in_scanner
 ```
 
 `audit` exits 0 only when both input roots are existing directories and every non-rest BOLD
