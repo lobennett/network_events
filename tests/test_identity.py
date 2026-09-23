@@ -103,6 +103,19 @@ def test_audit_rejects_orphan_behavior_and_behavior_with_exception(tmp_path):
     assert any("both behavior and exception" in error for error in result.errors)
 
 
+def test_audit_subject_filter_ignores_behavior_outside_pilot(tmp_path):
+    bids, behavior = dataset_with_bold(tmp_path, task="nBack")
+    write_behavior(behavior, "sub-s01_ses-01_task-nBack_run-1_beh.csv")
+    other = behavior / "sub-s02" / "ses-01" / "beh" / "sub-s02_ses-01_task-nBack_run-1_beh.csv"
+    other.parent.mkdir(parents=True)
+    other.write_text("trial_id\nexample\n")
+
+    result = audit_dataset(bids, behavior, subjects={"sub-s01"})
+
+    assert result.errors == ()
+    assert [identity.subject for identity, _ in result.pairs] == ["sub-s01"]
+
+
 def test_audit_accepts_reviewed_exception_and_rejects_malformed_rows(tmp_path):
     bids, behavior = dataset_with_bold(tmp_path, task="nBack")
     write_exceptions(behavior, [{

@@ -5,6 +5,7 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import AbstractSet
 
 
 _BEHAVIOR_RE = re.compile(
@@ -60,7 +61,9 @@ def _identity(match: re.Match[str]) -> RunIdentity:
     return RunIdentity(*(match.group(key) for key in ("subject", "session", "task", "run")))
 
 
-def _read_exceptions(path: Path) -> tuple[dict[RunIdentity, BehaviorException], list[str]]:
+def _read_exceptions(
+    path: Path, subjects: AbstractSet[str] | None = None,
+) -> tuple[dict[RunIdentity, BehaviorException], list[str]]:
     if not path.exists():
         return {}, []
     errors: list[str] = []
@@ -75,6 +78,8 @@ def _read_exceptions(path: Path) -> tuple[dict[RunIdentity, BehaviorException], 
                 return {}, [f"{path}: missing required columns: {', '.join(missing)}"]
             for row_number, row in enumerate(reader, start=2):
                 values = {column: (row.get(column) or "").strip() for column in _EXCEPTION_COLUMNS}
+                if subjects is not None and values["subject"] not in subjects:
+                    continue
                 identity_values = (values["subject"], values["session"], values["task"], values["run"])
                 valid_identity = (
                     _LABEL_RE.fullmatch(values["subject"].removeprefix("sub-")) is not None
@@ -139,7 +144,9 @@ def discover_bold_groups(bids_dir: Path) -> tuple[tuple[BoldGroup, ...], tuple[s
     return groups, tuple(sorted(errors))
 
 
-def audit_dataset(bids_dir: Path, behavioral_dir: Path) -> AuditResult:
+def audit_dataset(
+    bids_dir: Path, behavioral_dir: Path, *, subjects: AbstractSet[str] | None = None,
+) -> AuditResult:
     """Require one canonical behavior file or reviewed exception per non-rest BOLD."""
     bids_dir, behavioral_dir = Path(bids_dir), Path(behavioral_dir)
     errors = [
@@ -152,7 +159,11 @@ def audit_dataset(bids_dir: Path, behavioral_dir: Path) -> AuditResult:
     behavior_files: dict[RunIdentity, Path] = {}
     seen_behavior: set[RunIdentity] = set()
     unusable_behavior: set[RunIdentity] = set()
-    for csv_path in sorted(behavioral_dir.rglob("*.csv")):
+    behavior_roots = (
+        (behavioral_dir / subject for subject in sorted(subjects))
+        if subjects is not None else (behavioral_dir,)
+    )
+    for csv_path in sorted(path for root in behavior_roots for path in root.rglob("*.csv")):
         match = _BEHAVIOR_RE.fullmatch(csv_path.name)
         if match is None:
             errors.append(f"{csv_path}: unparseable behavior file")
@@ -170,10 +181,14 @@ def audit_dataset(bids_dir: Path, behavioral_dir: Path) -> AuditResult:
         behavior_files[identity] = csv_path
 
     bold_groups, bold_errors = discover_bold_groups(bids_dir)
+    if subjects is not None:
+        bold_groups = tuple(group for group in bold_groups if group.identity.subject in subjects)
     errors.extend(bold_errors)
     bolds = {group.identity for group in bold_groups}
 
-    exceptions, exception_errors = _read_exceptions(behavioral_dir / "behavioral_exceptions.tsv")
+    exceptions, exception_errors = _read_exceptions(
+        behavioral_dir / "behavioral_exceptions.tsv", subjects
+    )
     errors.extend(exception_errors)
     non_rest_bolds = {identity for identity in bolds if identity.task != "rest"}
 

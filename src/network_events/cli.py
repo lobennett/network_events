@@ -55,7 +55,7 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
 
 
 def _audit(args: argparse.Namespace) -> int:
-    result = audit_dataset(args.bids_dir, args.behavioral_dir)
+    result = audit_dataset(args.bids_dir, args.behavioral_dir, subjects=_subjects(args))
     payload = _audit_payload(result)
     _print_payload(payload)
     if args.json is not None:
@@ -64,7 +64,7 @@ def _audit(args: argparse.Namespace) -> int:
 
 
 def _create(args: argparse.Namespace) -> int:
-    result = audit_dataset(args.bids_dir, args.behavioral_dir)
+    result = audit_dataset(args.bids_dir, args.behavioral_dir, subjects=_subjects(args))
     payload = _audit_payload(result)
     if result.errors:
         _print_payload({"audit": payload, "created": 0, "failed": 0})
@@ -85,13 +85,20 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument("--bids-dir", type=Path, required=True)
     audit_parser.add_argument("--behavioral-dir", type=Path, required=True)
     audit_parser.add_argument("--json", type=Path)
+    audit_parser.add_argument("--subject", action="append")
     audit_parser.set_defaults(handler=_audit)
 
     create_parser = subparsers.add_parser("create")
     create_parser.add_argument("--bids-dir", type=Path, required=True)
     create_parser.add_argument("--behavioral-dir", type=Path, required=True)
+    create_parser.add_argument("--subject", action="append")
     create_parser.set_defaults(handler=_create)
     return parser
+
+
+def _subjects(args: argparse.Namespace) -> frozenset[str] | None:
+    values = getattr(args, "subject", None)
+    return frozenset(values) if values else None
 
 
 def main(argv: list[str] | None = None) -> int:

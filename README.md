@@ -32,6 +32,9 @@ network-events audit \
   --behavioral-dir /path/to/bids/sourcedata/behavioral/in_scanner
 ```
 
+Use `--subject sub-s03` to audit a one-subject pilot against the full canonical
+behavioral source.
+
 Create all audited events files:
 
 ```bash
