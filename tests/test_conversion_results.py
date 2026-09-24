@@ -95,3 +95,15 @@ def test_success_is_atomic_and_writes_truncation_evidence(tmp_path):
     assert not result.qc_file.with_suffix(result.qc_file.suffix + ".tmp").exists()
     sidecar = json.loads(result.qc_file.read_text())
     assert sidecar["NTestTrialsExpected"] == 3
+
+
+def test_event_evidence_links_exact_behavior_and_outputs(tmp_path):
+    import hashlib
+    bids, pair = valid_behavior_pair(tmp_path)
+    result = audited_create(bids)[0]
+    value = json.loads(result.qc_file.read_text())
+    provenance = value['Provenance']
+    assert provenance['Behavior']['path'] == pair[1].relative_to(bids).as_posix()
+    assert provenance['Behavior']['sha256'] == hashlib.sha256(pair[1].read_bytes()).hexdigest()
+    assert provenance['Events']['sha256'] == hashlib.sha256(result.events_file.read_bytes()).hexdigest()
+    assert provenance['BOLDInputs']

@@ -104,7 +104,9 @@ def test_go_nogo_classifies_only_true_trials_without_changing_timing(
     assert nontrials.go_nogo_condition.tolist() == (
         ["go", "nogo", "nogo", "go", "n/a"] if inherited_conditions else ["n/a"] * 5
     )
-    assert json.loads(qc.read_text()) == {
+    metrics = json.loads(qc.read_text())
+    assert metrics.pop("Provenance")["SchemaVersion"] == 1
+    assert metrics == {
         "NTestTrialsExpected": 5, "NTestTrialsRetained": 5,
         "FractionTestTrialsDropped": 0.0,
         "ScanDurationSeconds": pytest.approx(149.0, abs=1e-4),
@@ -303,7 +305,9 @@ def test_combined_clock_cut_and_scan_clip_report_separate_trial_costs(tmp_path):
     assert events.onset.tolist() == [2.0, 3.0]
     # Onset clipping preserves the duration of the final retained event.
     assert events.duration.tolist() == [1.0, 6.0]
-    assert json.loads(qc.read_text()) == {
+    metrics = json.loads(qc.read_text())
+    assert metrics.pop("Provenance")["SchemaVersion"] == 1
+    assert metrics == {
         "NTestTrialsExpected": 5, "NTestTrialsRetained": 2,
         "FractionTestTrialsDropped": 0.6, "ScanDurationSeconds": 5.0,
         "NScanTestTrialsDropped": 1, "FractionScanTestTrialsDropped": 0.5,

@@ -418,6 +418,8 @@ def _write_truncation_sidecar(sidecar_path: Path, tstats: dict) -> Path:
         "NScanTestTrialsDropped": tstats["scan_test_dropped"],
         "FractionScanTestTrialsDropped": tstats["fraction_scan_test_dropped"],
     }
+    if "Provenance" in tstats:
+        sidecar["Provenance"] = tstats["Provenance"]
     tmp_path = sidecar_path.with_suffix(sidecar_path.suffix + ".tmp")
     with tmp_path.open("w", encoding="utf-8") as stream:
         json.dump(sidecar, stream, indent=2)
@@ -487,6 +489,14 @@ def create_events(
             df = create_events_df(behavior_file, identity.task, offset_s, scan_s)
             tstats = events_truncation_stats(behavior_file, identity.task, offset_s, scan_s)
             _write_events(events_path, df)
+            tstats["Provenance"] = {
+                "SchemaVersion": 1,
+                "Behavior": _file_provenance(behavior_file, bids_dir),
+                "Events": _file_provenance(events_path, bids_dir),
+                "BOLDInputs": [_file_provenance(path, bids_dir) for path in bold_files.get(identity, ())],
+                "TimingSidecars": [_file_provenance(Path(str(path).removesuffix(".gz")).with_suffix(".json"), bids_dir)
+                                   for path in bold_files.get(identity, ())],
+            }
             _write_truncation_sidecar(qc_path, tstats)
         except Exception as exc:
             events_path.unlink(missing_ok=True)
@@ -522,3 +532,16 @@ def create_events(
 
     _write_conversion_errors(bids_dir, errors)
     return tuple(results)
+
+
+def _file_provenance(path: Path, bids_dir: Path) -> dict:
+    """Record byte identity without copying behavioral or imaging content."""
+    import hashlib
+    path, root = Path(path).absolute(), Path(bids_dir).absolute()
+    try:
+        relative, external = path.relative_to(root).as_posix(), False
+    except ValueError:
+        relative, external = path.name, True
+    with path.open('rb') as stream:
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+    return {'path': relative, 'sha256': digest, 'external': external}
