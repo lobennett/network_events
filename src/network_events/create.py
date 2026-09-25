@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from network_events.config import N_DUMMY, TR_SECONDS
+from network_events import __version__
 from network_events.identity import RunIdentity, discover_bold_groups
 from network_events.utils import (
     get_neg_rt_correction,
@@ -491,6 +492,8 @@ def create_events(
             _write_events(events_path, df)
             tstats["Provenance"] = {
                 "SchemaVersion": 1,
+                "Software": {"network_events": __version__, "pandas": pd.__version__,
+                             "numpy": np.__version__, "nibabel": nib.__version__},
                 "Behavior": _file_provenance(behavior_file, bids_dir),
                 "Events": _file_provenance(events_path, bids_dir),
                 "BOLDInputs": [_file_provenance(path, bids_dir) for path in bold_files.get(identity, ())],
